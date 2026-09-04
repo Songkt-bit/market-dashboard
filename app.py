@@ -45,7 +45,6 @@ def get_summary_table_data():
         close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
         close = close.iloc[:, 0]
         
-        # 연도별 마지막 거래일 종가 추출
         yearly = close.groupby(close.index.year).last()
         
         val_23 = yearly.get(2023, None)
@@ -53,7 +52,6 @@ def get_summary_table_data():
         val_25 = yearly.get(2025, None)
         val_today = close.iloc[-1]
         
-        # YTD 계산 (2025년 종가 대비 오늘)
         ytd = ((val_today / val_25) - 1) * 100 if pd.notna(val_25) and val_25 != 0 else 0
             
         results.append({
@@ -115,7 +113,7 @@ def get_macro_correlation_data():
     return pd.DataFrame({'KOSPI': close_kospi, 'US10Y': close_tnx}).dropna()
 
 
-# 4. 탭 화면 4개로 나누기! (Home 추가)
+# 4. 탭 화면 4개로 나누기!
 tab_home, tab1, tab2, tab3 = st.tabs(["🏠 Home: 시장 요약", "📈 Page 1: 주가지수", "💱 Page 2: 글로벌 환율", "🇺🇸🇰🇷 Page 3: 매크로 상관관계"])
 
 # ==========================================
@@ -124,24 +122,30 @@ tab_home, tab1, tab2, tab3 = st.tabs(["🏠 Home: 시장 요약", "📈 Page 1: 
 with tab_home:
     st.subheader("최근 3년 & YTD 글로벌 시장 요약")
     
-    # 데이터 불러오기 및 오늘 날짜 컬럼명 받기
-    df_summary, today_col = get_summary_table_data()
+    # 💡 [핵심 변경 사항] 화면을 2개의 단(왼쪽, 오른쪽)으로 분할
+    col_left, col_right = st.columns(2)
     
-    # 판다스(Pandas) 스타일러를 이용해 표 숫자 디자인 (콤마, 소수점, 퍼센트 색상 등)
-    def highlight_ytd(val):
-        color = '#ffcccc' if val < 0 else '#ccffcc'
-        return f'background-color: {color}'
+    # 표는 왼쪽 단에만 배치
+    with col_left:
+        df_summary, today_col = get_summary_table_data()
+        
+        def highlight_ytd(val):
+            color = '#ffcccc' if val < 0 else '#ccffcc'
+            return f'background-color: {color}'
 
-    formatted_df = df_summary.style.format({
-        "2023 종가": "{:,.2f}",
-        "2024 종가": "{:,.2f}",
-        "2025 종가": "{:,.2f}",
-        today_col: "{:,.2f}",
-        "YTD": "{:+.2f}%"
-    }).map(highlight_ytd, subset=['YTD'])
-    
-    # 표 출력 (인덱스 번호 숨김, 가로폭 꽉 차게)
-    st.dataframe(formatted_df, use_container_width=True, hide_index=True)
+        formatted_df = df_summary.style.format({
+            "2023 종가": "{:,.2f}",
+            "2024 종가": "{:,.2f}",
+            "2025 종가": "{:,.2f}",
+            today_col: "{:,.2f}",
+            "YTD": "{:+.2f}%"
+        }).map(highlight_ytd, subset=['YTD'])
+        
+        st.dataframe(formatted_df, use_container_width=True, hide_index=True)
+        
+    # 오른쪽 단은 향후 위젯을 위해 안내문만 남겨두고 비워둠
+    with col_right:
+        st.info("💡 나중에 이곳에 새로운 위젯이나 차트를 추가할 수 있습니다.")
 
 # ==========================================
 # [Page 1] 주가지수 화면
