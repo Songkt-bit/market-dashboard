@@ -97,7 +97,7 @@ def get_yearend_snapshot_fred(series_id, years=(2021, 2022, 2023)):
 #    최신 통계표코드/항목코드를 직접 확인한 뒤 교체해서 사용하세요.
 #    (코드가 바뀌면 데이터가 비어있는 형태로 조용히 실패합니다)
 # ----------------------------------------------------------
-ECOS_API_KEY = "여기에_발급받은_API_KEY_입력"
+ECOS_API_KEY = "SD3KP3QMBSUDCP8GK0NM"
 ECOS_STAT_CODE = "817Y002"  # 시장금리 통계표코드 (예시, 확인 필요)
 
 
