@@ -164,8 +164,8 @@ def get_home_table():
     # 국고채 3년/10년: ECOS_API_KEY를 채워 넣으면 자동으로 채워집니다.
     if ECOS_API_KEY != "SD3KP3QMBSUDCP8GK0NM":
         ecos_items = [
-            ("국채 3년", "10200000"),   # 예시 항목코드 - 반드시 ECOS에서 확인
-            ("국채 10년", "10210000"),  # 예시 항목코드 - 반드시 ECOS에서 확인
+            ("국채 3년", "010200000"),   # 예시 항목코드 - 반드시 ECOS에서 확인
+            ("국채 10년", "010210000"),  # 예시 항목코드 - 반드시 ECOS에서 확인
         ]
         for name, code in ecos_items:
             snap = get_ecos_bond_yield(code)
