@@ -203,10 +203,13 @@ def style_home_table(df):
         color = "#1f4fd6" if val >= 0 else "#d62728"
         return f"color: {color}; font-weight: bold"
 
-    styled = (display_df.style
-              .format(precision=2, na_rep="-")
-              .applymap(color_ytd, subset=["YTD(%)"])
-              .set_properties(subset=["YTD(%)"], **{"background-color": "#fff8b0"}))
+    styler = display_df.style.format(precision=2, na_rep="-")
+    # pandas >= 2.1: Styler.map, 이전 버전: Styler.applymap (호환 처리)
+    if hasattr(styler, "map"):
+        styler = styler.map(color_ytd, subset=["YTD(%)"])
+    else:
+        styler = styler.applymap(color_ytd, subset=["YTD(%)"])
+    styled = styler.set_properties(subset=["YTD(%)"], **{"background-color": "#fff8b0"})
     return styled
 
 
