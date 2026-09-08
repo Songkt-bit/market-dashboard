@@ -162,7 +162,6 @@ tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지
 # [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    # 표가 넉넉히 들어갈 수 있도록 오른쪽 단 비율을 약간 늘림
     col_left, col_right = st.columns([1, 1.2]) 
     
     with col_left:
@@ -202,21 +201,18 @@ with tab_home:
                 if row in ['상승횟수', '총횟수']:
                     pass # 배경색 제거
                 elif row == '상승확률':
-                    # [독립 히트맵] 50%를 기준으로 색상 강도 결정
                     intensity = min(abs(val - 50) / 50.0, 1.0) if pd.notna(val) else 0
                     if val > 50:
                         bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
                     elif val < 50:
                         bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
                 else:
-                    # [일반 히트맵] 수익률 크기에 따라 색상 강도 결정
                     intensity = min(abs(val) / 12.0, 1.0)
                     if val > 0:
                         bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
                     elif val < 0:
                         bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
                 
-                # 'average' 행의 위쪽(Top)에 굵은 테두리선 긋기
                 if row == 'average':
                     bg_color += ' border-top: 3px solid #666 !important;'
                     
@@ -225,59 +221,22 @@ with tab_home:
         # 판다스를 HTML 뼈대로 변환
         html_table = formatted_str_df.style.apply(lambda _: styles_df, axis=None).to_html()
         
-        # HTML/CSS로 여백 압축, 스크롤, 굵은 구분선 강제 주입
-        custom_css = f"""
-        <style>
-        .heatmap-container {{
-            width: 100%;
-            max-height: 700px;
-            overflow-y: auto;
-            overflow-x: auto;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }}
-        .heatmap-container table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 11.5px; /* 글자 크기 축소 */
-            text-align: center;
-        }}
-        .heatmap-container th, .heatmap-container td {{
-            padding: 4px 2px !important; /* 위아래, 좌우 여백 극한으로 압축 */
-            border: 1px solid #e0e0e0;
-            white-space: nowrap;
-        }}
-        .heatmap-container th {{
-            font-weight: bold;
-        }}
-        /* 인덱스(2000년이후 등) 컬럼 가로폭 여유있게 확장 */
-        .heatmap-container th:first-child {{
-            min-width: 90px !important;
-            text-align: left;
-            padding-left: 8px !important;
-        }}
-        /* 헤더 행 고정 (스크롤을 내려도 1월~12월 이름표가 계속 보이게) */
-        .heatmap-container thead th {{
-            position: sticky;
-            top: 0;
-            background-color: #f0f2f6;
-            z-index: 1;
-        }}
-        @media (prefers-color-scheme: dark) {{
-            .heatmap-container thead th {{
-                background-color: #0e1117;
-            }}
-        }}
-        /* 'average' 통계칸 시작 부근 굵은 구분선 처리 */
-        .heatmap-container tbody tr:nth-last-child(7) th {{
-            border-top: 3px solid #666 !important;
-        }}
-        </style>
-        <div class="heatmap-container">
-            {html_table}
-        </div>
-        """
-        # 만든 HTML 표를 웹사이트 화면에 출력
+        # [수정된 부분] 들여쓰기 방지를 위해 HTML과 CSS를 왼쪽 끝에 바짝 붙여서 선언합니다.
+        custom_css = f"""<style>
+.heatmap-container {{ width: 100%; max-height: 700px; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; border-radius: 5px; }}
+.heatmap-container table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }}
+.heatmap-container th, .heatmap-container td {{ padding: 4px 2px !important; border: 1px solid #e0e0e0; white-space: nowrap; }}
+.heatmap-container th {{ font-weight: bold; }}
+.heatmap-container th:first-child {{ min-width: 90px !important; text-align: left; padding-left: 8px !important; }}
+.heatmap-container thead th {{ position: sticky; top: 0; background-color: #f0f2f6; z-index: 1; }}
+@media (prefers-color-scheme: dark) {{ .heatmap-container thead th {{ background-color: #0e1117; }} }}
+.heatmap-container tbody tr:nth-last-child(7) th {{ border-top: 3px solid #666 !important; }}
+</style>
+<div class="heatmap-container">
+{html_table}
+</div>"""
+        
+        # 적용
         st.markdown(custom_css, unsafe_allow_html=True)
 
 # ==========================================
