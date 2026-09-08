@@ -91,9 +91,10 @@ def get_kospi_heatmap_data():
     total_count = pivot.notna().sum()
     win_rate = (pos_count / total_count) * 100
     
+    # 💡 상승횟수, 총횟수 행을 제외하고 핵심 통계만 구성
     summary = pd.DataFrame([
-        avg_all, avg_2000, avg_2010, avg_2020, pos_count, total_count, win_rate
-    ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승횟수', '총횟수', '상승확률'])
+        avg_all, avg_2000, avg_2010, avg_2020, win_rate
+    ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승확률'])
     
     full_df = pd.concat([pivot, summary])
     full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
@@ -190,17 +191,12 @@ with tab_home:
                 if pd.isna(val): continue
                 
                 # 1. 글자 포맷팅
-                if row in ['상승횟수', '총횟수']:
-                    formatted_str_df.loc[row, col] = f"{val:.0f}"
-                else:
-                    formatted_str_df.loc[row, col] = f"{val:.1f}%"
+                formatted_str_df.loc[row, col] = f"{val:.1f}%"
                     
                 # 2. 배경색 및 선 디자인
                 bg_color = ""
                 
-                if row in ['상승횟수', '총횟수']:
-                    pass
-                elif row == '상승확률':
+                if row == '상승확률':
                     intensity = min(abs(val - 50) / 50.0, 1.0) if pd.notna(val) else 0
                     if val > 50:
                         bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
@@ -220,88 +216,20 @@ with tab_home:
                 
         html_table = formatted_str_df.style.apply(lambda _: styles_df, axis=None).to_html()
         
-        # [NEW] HTML 변환 후 <tbody> 내부의 첫 번째 행(average 행) 위에 월 헤더 행을 복제해서 강제로 끼워넣기 위한 파이썬 문자열 처리
-        header_tr = '<tr>' + ''.join([f'<th>{col}</th>' for col in full_df.columns]) + '</tr>'
-        # average 행 직전에 헤더 행을 한번 더 삽입
-        target_str = '<tr id="T_'
-        if target_str in html_table:
-            # 첫 번째 average 행 찾기
-            parts = html_table.split('id="T_')
-            for i in range(1, len(parts)):
-                if 'average' in parts[i]:
-                    # 해당 row 앞단에 헤더 tr 주입
-                    html_table = html_table.split('id="T_' + parts[i].split('"')[0])[0] + 'id="T_' + parts[i]
-                    # 편의를 위해 DOM 조작 대신 CSS 및 하단 스타일에서 처리되도록 깔끔하게 주입
-                    break
-
-        # [NEW] 렌더링된 HTML 테이블 내에서 average 행을 찾아 그 위에 월 헤더를 <tr>로 심어주는 스마트 치환 로직
-        # pandas 스타일러가 생성하는 고유 id 패턴을 이용해 average 행의 위치를 파악합니다.
-        avg_row_id = ""
-        for r_idx in full_df.index:
-            if str(r_idx) == 'average':
-                # pandas style이 만드는 row 이름 매칭을 위해 탐색
-                pass
-
-        # HTML 구조상 정밀 제어를 위한 CSS 및 DOM 조작 스타일 적용
-        custom_css = f"""<style>
-.heatmap-container {{ width: 100%; max-height: 700px; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; border-radius: 5px; }}
-.heatmap-container table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }}
-.heatmap-container th, .heatmap-container td {{ padding: 4px 2px !important; border: 1px solid #e0e0e0; white-space: nowrap; }}
-.heatmap-container th {{ font-weight: bold; }}
-
-/* 1. 연도 데이터(맨 왼쪽 첫번째 컬럼)와 월별 데이터 사이 굵은 세로선 */
-.heatmap-container th:first-child, .heatmap-container td:first-child {{
-    border-right: 3px solid #666 !important;
-}}
-
-/* 2. 월별 데이터(12번째 컬럼)와 연간수익률(오른쪽 마지막 컬럼) 사이 굵은 세로선 */
-.heatmap-container th:nth-last-child(2), .heatmap-container td:nth-last-child(2) {{
-    border-right: 3px solid #666 !important;
-}}
-
-.heatmap-container th:first-child {{ min-width: 90px !important; text-align: left; padding-left: 8px !important; }}
-.heatmap-container thead th {{ position: sticky; top: 0; background-color: #f0f2f6; z-index: 1; }}
-@media (prefers-color-scheme: dark) {{ .heatmap-container thead th {{ background-color: #0e1117; }} }}
-
-/* 3. average 행 바로 위에 월 헤더(1월~12월)를 똑같이 반복해서 띄우는 가상 행 스타일 */
-.heatmap-container tbody tr:nth-last-child(7) {{
-    border-top: 3px solid #666 !important;
-    background-color: #f0f2f6;
-    font-weight: bold;
-}}
-@media (prefers-color-scheme: dark) {{
-    .heatmap-container tbody tr:nth-last-child(7) {{
-        background-color: #1e222b;
-    }}
-}}
-</style>
-<div class="heatmap-container">
-{html_table}
-</div>"""
-
-        # 파이썬 레벨에서 'average'가 들어간 행의 직전에 1~12월 헤더를 품은 <tr> 태그를 강제로 삽입
-        # HTML 문자열 조작으로 정확히 average 행 위에 헤더를 복제합니다.
-        if ">average<" in custom_css:
-            pass
-        
-        # 안전하고 직관적인 치환을 위해 테이블 내용 중 average 행 찾기
+        # average 행 바로 위에 월 헤더를 심기 위한 문자열 치환 로직 (요약 행이 5개가 되었으므로 구조 대응)
         target_snippet = ">average<"
         if target_snippet in html_table:
-            # average가 포함된 <tr> 태그 통째로 찾기
             idx_pos = html_table.find(target_snippet)
             tr_start = html_table.rfind("<tr", 0, idx_pos)
             if tr_start != -1:
-                # 상단 헤더 내용물 추출
                 thead_start = html_table.find("<thead>")
                 thead_end = html_table.find("</thead>")
                 if thead_start != -1 and thead_end != -1:
                     header_content = html_table[thead_start:thead_end+8]
-                    # <thead>를 <tr> 형태로 변환
                     header_tr_html = header_content.replace("<thead>", "<tr style='background-color: #f0f2f6; font-weight: bold;'>").replace("</thead>", "</tr>").replace("th>", "td>")
-                    # average 행 바로 앞에 삽입
                     html_table = html_table[:tr_start] + header_tr_html + html_table[tr_start:]
 
-        # 최종 HTML 재조립
+        # 최종 CSS 스타일링 (요약 행 5개 구조에 맞춰 위치 조정 완료)
         final_custom_css = f"""<style>
 .heatmap-container {{ width: 100%; max-height: 700px; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; border-radius: 5px; }}
 .heatmap-container table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }}
