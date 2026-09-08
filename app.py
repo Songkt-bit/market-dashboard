@@ -55,21 +55,17 @@ def get_summary_table_data():
         })
     return pd.DataFrame(results), today_str
 
-# [NEW] 코스피 월별 수익률 히트맵 계산 엔진 (매달/매년 자동 갱신 구조)
 @st.cache_data(ttl=3600)
 def get_kospi_heatmap_data():
-    # 야후 파이낸스의 한계로 1996년 말부터 데이터 수집 가능
     df = yf.download("^KS11", start="1996-12-01", progress=False)
     if df.empty: return pd.DataFrame()
     
     close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
     close = close.iloc[:, 0]
     
-    # 월말 종가 및 수익률
     monthly_close = close.resample('ME').last()
     monthly_ret = monthly_close.pct_change() * 100
     
-    # 연말 종가 및 연간 수익률
     yearly_close = close.resample('YE').last()
     yearly_ret = yearly_close.pct_change() * 100
     yearly_ret.index = yearly_ret.index.year
@@ -78,18 +74,14 @@ def get_kospi_heatmap_data():
     df_ret['Year'] = df_ret.index.year
     df_ret['Month'] = df_ret.index.month
     
-    # 연도별-월별 피벗 테이블 생성
     pivot = df_ret.pivot(index='Year', columns='Month', values='Return')
     
-    # 항상 1~12월 컬럼이 보이도록 보장 (미래 월은 빈칸 처리)
     cols = list(range(1, 13))
     pivot = pivot.reindex(columns=cols)
     pivot['연간수익'] = yearly_ret
     
-    # 데이터가 온전한 1997년부터 표시
     pivot = pivot[pivot.index >= 1997]
     
-    # 하단 요약 통계 계산
     avg_all = pivot.mean()
     avg_2000 = pivot[pivot.index >= 2000].mean()
     avg_2010 = pivot[pivot.index >= 2010].mean()
@@ -104,8 +96,6 @@ def get_kospi_heatmap_data():
     ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승횟수', '총횟수', '상승확률'])
     
     full_df = pd.concat([pivot, summary])
-    
-    # 스트림릿 표기용 컬럼명 (숫자 1,2 대신 1월, 2월 형식)
     full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
     return full_df
 
@@ -172,9 +162,9 @@ tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지
 # [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    col_left, col_right = st.columns(2)
+    # 표가 넉넉히 들어갈 수 있도록 오른쪽 단 비율을 약간 늘림
+    col_left, col_right = st.columns([1, 1.2]) 
     
-    # 1. 왼쪽: 요약 테이블
     with col_left:
         st.subheader("최근 3년 & YTD 글로벌 시장 요약")
         df_summary, today_col = get_summary_table_data()
@@ -187,13 +177,11 @@ with tab_home:
         }).map(highlight_ytd, subset=['YTD'])
         st.dataframe(formatted_df, use_container_width=True, hide_index=True)
         
-    # 2. 오른쪽: [NEW] 코스피 월별 수익률 히트맵
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
         
         full_df = get_kospi_heatmap_data()
         
-        # 글자 표기와 색상을 분리하여 깔끔하게 적용하는 로직
         formatted_str_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         styles_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         
@@ -202,26 +190,98 @@ with tab_home:
                 val = full_df.loc[row, col]
                 if pd.isna(val): continue
                 
-                # 글자 포맷 (.0f 또는 .1f%)
+                # 1. 글자 포맷팅
                 if row in ['상승횟수', '총횟수']:
                     formatted_str_df.loc[row, col] = f"{val:.0f}"
                 else:
                     formatted_str_df.loc[row, col] = f"{val:.1f}%"
                     
-                # 배경색 포맷 (상승/하락 강도에 따라 투명도 조절)
-                if row not in ['상승횟수', '총횟수']:
-                    intensity = min(abs(val) / 12.0, 1.0) # 12% 이상이면 가장 진한 색
+                # 2. 배경색 및 선 디자인
+                bg_color = ""
+                
+                if row in ['상승횟수', '총횟수']:
+                    pass # 배경색 제거
+                elif row == '상승확률':
+                    # [독립 히트맵] 50%를 기준으로 색상 강도 결정
+                    intensity = min(abs(val - 50) / 50.0, 1.0) if pd.notna(val) else 0
+                    if val > 50:
+                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
+                    elif val < 50:
+                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                else:
+                    # [일반 히트맵] 수익률 크기에 따라 색상 강도 결정
+                    intensity = min(abs(val) / 12.0, 1.0)
                     if val > 0:
-                        styles_df.loc[row, col] = f'background-color: rgba(255, 99, 71, {intensity})'
+                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
                     elif val < 0:
-                        styles_df.loc[row, col] = f'background-color: rgba(100, 149, 237, {intensity})'
+                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                
+                # 'average' 행의 위쪽(Top)에 굵은 테두리선 긋기
+                if row == 'average':
+                    bg_color += ' border-top: 3px solid #666 !important;'
+                    
+                styles_df.loc[row, col] = bg_color
+                
+        # 판다스를 HTML 뼈대로 변환
+        html_table = formatted_str_df.style.apply(lambda _: styles_df, axis=None).to_html()
         
-        # 적용 및 화면 출력 (높이를 넉넉히 잡아 스크롤하기 편하게 설정)
-        styled_heatmap = formatted_str_df.style.apply(lambda _: styles_df, axis=None)
-        st.dataframe(styled_heatmap, use_container_width=True, height=650)
+        # HTML/CSS로 여백 압축, 스크롤, 굵은 구분선 강제 주입
+        custom_css = f"""
+        <style>
+        .heatmap-container {{
+            width: 100%;
+            max-height: 700px;
+            overflow-y: auto;
+            overflow-x: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }}
+        .heatmap-container table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11.5px; /* 글자 크기 축소 */
+            text-align: center;
+        }}
+        .heatmap-container th, .heatmap-container td {{
+            padding: 4px 2px !important; /* 위아래, 좌우 여백 극한으로 압축 */
+            border: 1px solid #e0e0e0;
+            white-space: nowrap;
+        }}
+        .heatmap-container th {{
+            font-weight: bold;
+        }}
+        /* 인덱스(2000년이후 등) 컬럼 가로폭 여유있게 확장 */
+        .heatmap-container th:first-child {{
+            min-width: 90px !important;
+            text-align: left;
+            padding-left: 8px !important;
+        }}
+        /* 헤더 행 고정 (스크롤을 내려도 1월~12월 이름표가 계속 보이게) */
+        .heatmap-container thead th {{
+            position: sticky;
+            top: 0;
+            background-color: #f0f2f6;
+            z-index: 1;
+        }}
+        @media (prefers-color-scheme: dark) {{
+            .heatmap-container thead th {{
+                background-color: #0e1117;
+            }}
+        }}
+        /* 'average' 통계칸 시작 부근 굵은 구분선 처리 */
+        .heatmap-container tbody tr:nth-last-child(7) th {{
+            border-top: 3px solid #666 !important;
+        }}
+        </style>
+        <div class="heatmap-container">
+            {html_table}
+        </div>
+        """
+        # 만든 HTML 표를 웹사이트 화면에 출력
+        st.markdown(custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# 이하 Page 1 ~ Page 4 코드는 어제와 동일하게 유지됩니다.
+# [Page 1] 주가지수 화면
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 YTD & MDD")
@@ -237,6 +297,9 @@ with tab1:
             fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
+# ==========================================
+# [Page 2] 환율 화면
+# ==========================================
 with tab2:
     st.subheader("주요 통화 환율 & 달러 인덱스")
     cols2 = st.columns(2)
@@ -251,6 +314,9 @@ with tab2:
             fig.update_yaxes(title_text="DD (%)", range=[-20, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
+# ==========================================
+# [Page 3] 매크로 상관관계 (코스피 vs 국채금리)
+# ==========================================
 with tab3:
     st.subheader("금리와 코스피 장기 추이 (2000년 ~ 현재)")
     df_macro = get_macro_correlation_data()
@@ -262,6 +328,9 @@ with tab3:
     fig.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
     st.plotly_chart(fig, use_container_width=True)
 
+# ==========================================
+# [Page 4] 미국 국채 장기 추이 (버튼으로 전환)
+# ==========================================
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
     bonds_data = get_us_bonds_data()
