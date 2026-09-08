@@ -151,7 +151,7 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 4. 탭 화면 구성 (4개 페이지로 완벽 정돈)
+# 4. 탭 화면 구성
 tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "Page 3: 상관관계", "Page 4: 미국 국채"])
 
 # ==========================================
@@ -180,6 +180,10 @@ with tab_home:
         formatted_str_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         styles_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         
+        # 💡 연간수익 컬럼끼리 독립적으로 히트맵 농도를 계산하기 위한 최대 절대값 산출
+        max_annual_abs = full_df['연간수익'].drop(['average', '2000년이후', '2010년이후', '2020년이후', '상승확률'], errors='ignore').abs().max()
+        if pd.isna(max_annual_abs) or max_annual_abs == 0: max_annual_abs = 40.0
+
         for row in full_df.index:
             for col in full_df.columns:
                 val = full_df.loc[row, col]
@@ -195,7 +199,13 @@ with tab_home:
                     elif val < 50:
                         bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
                 else:
-                    intensity = min(abs(val) / 12.0, 1.0)
+                    if col == '연간수익':
+                        # 연간수익끼리 독립적인 기준(max_annual_abs)으로 히트맵 농도 적용
+                        intensity = min(abs(val) / max_annual_abs, 1.0)
+                    else:
+                        # 월별 데이터는 기존대로 12.0 기준 적용
+                        intensity = min(abs(val) / 12.0, 1.0)
+                        
                     if val > 0:
                         bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
                     elif val < 0:
@@ -250,7 +260,7 @@ with tab1:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:,.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
@@ -267,7 +277,7 @@ with tab2:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(color='royalblue', width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:,.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-20, 2], secondary_y=True)
