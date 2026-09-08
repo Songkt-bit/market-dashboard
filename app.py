@@ -75,23 +75,19 @@ def get_kospi_heatmap_data():
     df_ret['Month'] = df_ret.index.month
     
     pivot = df_ret.pivot(index='Year', columns='Month', values='Return')
-    
     cols = list(range(1, 13))
     pivot = pivot.reindex(columns=cols)
     pivot['연간수익'] = yearly_ret
-    
     pivot = pivot[pivot.index >= 1997]
     
     avg_all = pivot.mean()
     avg_2000 = pivot[pivot.index >= 2000].mean()
     avg_2010 = pivot[pivot.index >= 2010].mean()
     avg_2020 = pivot[pivot.index >= 2020].mean()
-    
     pos_count = (pivot > 0).sum()
     total_count = pivot.notna().sum()
     win_rate = (pos_count / total_count) * 100
     
-    # 💡 상승횟수, 총횟수 행을 제외하고 핵심 통계만 구성
     summary = pd.DataFrame([
         avg_all, avg_2000, avg_2010, avg_2020, win_rate
     ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승확률'])
@@ -156,8 +152,8 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", " Page 3: 상관관계", " Page 4: 미국 국채"])
+# 4. 탭 화면 구성 (Page 5 추가)
+tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "Page 3: 상관관계", "Page 4: 미국 국채", "⚙️ Page 5: 국내파생 수급"])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
@@ -179,9 +175,7 @@ with tab_home:
         
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
-        
         full_df = get_kospi_heatmap_data()
-        
         formatted_str_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         styles_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         
@@ -189,34 +183,20 @@ with tab_home:
             for col in full_df.columns:
                 val = full_df.loc[row, col]
                 if pd.isna(val): continue
-                
-                # 1. 글자 포맷팅
                 formatted_str_df.loc[row, col] = f"{val:.1f}%"
-                    
-                # 2. 배경색 및 선 디자인
                 bg_color = ""
-                
                 if row == '상승확률':
                     intensity = min(abs(val - 50) / 50.0, 1.0) if pd.notna(val) else 0
-                    if val > 50:
-                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
-                    elif val < 50:
-                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                    if val > 50: bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
+                    elif val < 50: bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
                 else:
                     intensity = min(abs(val) / 12.0, 1.0)
-                    if val > 0:
-                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
-                    elif val < 0:
-                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
-                
-                if row == 'average':
-                    bg_color += ' border-top: 3px solid #666 !important;'
-                    
+                    if val > 0: bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
+                    elif val < 0: bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                if row == 'average': bg_color += ' border-top: 3px solid #666 !important;'
                 styles_df.loc[row, col] = bg_color
                 
         html_table = formatted_str_df.style.apply(lambda _: styles_df, axis=None).to_html()
-        
-        # average 행 바로 위에 월 헤더를 심기 위한 문자열 치환 로직 (요약 행이 5개가 되었으므로 구조 대응)
         target_snippet = ">average<"
         if target_snippet in html_table:
             idx_pos = html_table.find(target_snippet)
@@ -229,18 +209,13 @@ with tab_home:
                     header_tr_html = header_content.replace("<thead>", "<tr style='background-color: #f0f2f6; font-weight: bold;'>").replace("</thead>", "</tr>").replace("th>", "td>")
                     html_table = html_table[:tr_start] + header_tr_html + html_table[tr_start:]
 
-        # 최종 CSS 스타일링 (요약 행 5개 구조에 맞춰 위치 조정 완료)
         final_custom_css = f"""<style>
 .heatmap-container {{ width: 100%; max-height: 700px; overflow-y: auto; overflow-x: auto; border: 1px solid #ddd; border-radius: 5px; }}
 .heatmap-container table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }}
 .heatmap-container th, .heatmap-container td {{ padding: 4px 2px !important; border: 1px solid #e0e0e0; white-space: nowrap; }}
 .heatmap-container th {{ font-weight: bold; }}
-
-/* 왼쪽 연도와 월별 데이터 사이 굵은 선 */
 .heatmap-container th:first-child, .heatmap-container td:first-child {{ border-right: 3px solid #666 !important; }}
-/* 월별 데이터와 오른쪽 연간수익률 사이 굵은 선 */
 .heatmap-container th:nth-last-child(2), .heatmap-container td:nth-last-child(2) {{ border-right: 3px solid #666 !important; }}
-
 .heatmap-container th:first-child {{ min-width: 90px !important; text-align: left; padding-left: 8px !important; }}
 .heatmap-container thead th {{ position: sticky; top: 0; background-color: #f0f2f6; z-index: 1; }}
 @media (prefers-color-scheme: dark) {{ .heatmap-container thead th {{ background-color: #0e1117; }} }}
@@ -248,7 +223,6 @@ with tab_home:
 <div class="heatmap-container">
 {html_table}
 </div>"""
-
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
@@ -262,7 +236,7 @@ with tab1:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:,.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
@@ -279,7 +253,7 @@ with tab2:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(color='royalblue', width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:,.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-20, 2], secondary_y=True)
@@ -300,7 +274,7 @@ with tab3:
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 4] 미국 국채 장기 추이 (버튼으로 전환)
+# [Page 4] 미국 국채 장기 추이
 # ==========================================
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
@@ -314,3 +288,60 @@ with tab4:
         fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)",
                           height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
         st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================
+# [Page 5] 국내 파생 수급 & 미결제약정 (데이터 구조화 탭)
+# ==========================================
+with tab5:
+    st.subheader("⚙️ 국내 파생상품 수급 및 미결제약정 분석")
+    st.info("💡 만기일 이후의 KRX 파생 데이터를 엑셀(CSV)로 업로드하여 수급과 미결제약정(OI)의 상관관계를 분석하는 공간입니다.")
+    
+    # CSV 파일 업로더 생성
+    uploaded_file = st.file_uploader("KRX/HTS에서 추출한 파생 수급 CSV 파일을 업로드하세요", type=["csv"])
+    
+    if uploaded_file is not None:
+        # 사용자가 파일을 올린 경우
+        df_derivatives = pd.read_csv(uploaded_file)
+        st.success("데이터가 성공적으로 구조화되었습니다!")
+        st.dataframe(df_derivatives.head(), use_container_width=True)
+        
+        # 데이터 구조 예시 (컬럼 검증 안내)
+        # 필수 컬럼: Date, Close(선물가격), Foreign_Net(외인선물누적), Open_Interest(미결제약정)
+        if all(col in df_derivatives.columns for col in ['Date', 'Close', 'Foreign_Net', 'Open_Interest']):
+            df_derivatives['Date'] = pd.to_datetime(df_derivatives['Date'])
+            df_derivatives = df_derivatives.set_index('Date')
+            
+            # 이중 Y축 차트 (상단: 선물 가격 & 미결제약정 / 하단: 외인 누적 순매수)
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                vertical_spacing=0.05, 
+                                row_heights=[0.7, 0.3],
+                                specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
+            
+            # 1행 좌측: 선물 가격
+            fig.add_trace(go.Scatter(x=df_derivatives.index, y=df_derivatives['Close'], name="코스피200 선물", line=dict(color='black', width=1.5)), row=1, col=1, secondary_y=False)
+            # 1행 우측: 미결제약정 (OI)
+            fig.add_trace(go.Scatter(x=df_derivatives.index, y=df_derivatives['Open_Interest'], name="미결제약정(OI)", line=dict(color='purple', width=1, dash='dot')), row=1, col=1, secondary_y=True)
+            
+            # 2행: 외국인 선물 누적 순매수
+            fig.add_trace(go.Bar(x=df_derivatives.index, y=df_derivatives['Foreign_Net'], name="외인 선물 누적", marker_color='red'), row=2, col=1)
+            
+            fig.update_layout(height=650, margin=dict(l=20, r=20, t=30, b=20), showlegend=True)
+            fig.update_yaxes(title_text="선물 가격", row=1, col=1, secondary_y=False)
+            fig.update_yaxes(title_text="미결제약정(계약)", row=1, col=1, secondary_y=True)
+            fig.update_yaxes(title_text="외인 누적", row=2, col=1)
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("⚠️ 업로드하신 파일에 필수 컬럼(`Date`, `Close`, `Foreign_Net`, `Open_Interest`)이 포함되어 있는지 확인해 주세요.")
+    else:
+        # 파일이 없을 때 보여줄 안내 가이드
+        st.markdown("""
+        ### 📋 파생 수급 CSV 파일 구조 가이드
+        엑셀 파일(`csv`)을 만드실 때 첫 번째 행(컬럼명)을 아래와 같이 맞춰주시면 대시보드가 완벽하게 읽어냅니다.
+        * **`Date`**: 날짜 (예: `2026-09-01`)
+        * **`Close`**: 코스피200 선물 종가
+        * **`Foreign_Net`**: 외국인 선물 누적 순매수 계약 수 (만기일 기준 리셋된 값)
+        * **`Open_Interest`**: 시장 전체 미결제약정 수량
+        
+        > 💡 HTS나 KRX에서 만기일 이후 데이터를 다운받아 이 형식으로 저장해 두면, 버튼 클릭 한 번으로 기관·외인의 진짜 포쇼션을 차트 두 개로 겹쳐서 입체적으로 분석하실 수 있습니다!
+        """)
