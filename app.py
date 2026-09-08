@@ -24,7 +24,21 @@ FX_TICKERS = {
     "WTI 원유 ($/배럴)": "CL=F"
 }
 
-start_date_ytd = f"{datetime.datetime.now().year}-01-01"
+# 기간 선택에 따른 시작일 계산 헬퍼 함수
+def get_start_date(period_option):
+    today = datetime.date.today()
+    if period_option == "1년":
+        return today - datetime.timedelta(days=365)
+    elif period_option == "3년":
+        return today - datetime.timedelta(days=365 * 3)
+    elif period_option == "5년":
+        return today - datetime.timedelta(days=365 * 5)
+    elif period_option == "10년":
+        return today - datetime.timedelta(days=365 * 10)
+    elif period_option == "20년":
+        return today - datetime.timedelta(days=365 * 20)
+    else:
+        return datetime.date(2000, 1, 1)
 
 # 3. 데이터 수집 엔진
 @st.cache_data(ttl=3600)
@@ -96,20 +110,21 @@ def get_kospi_heatmap_data():
     full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
     return full_df
 
+# 💡 Page 1 주가지수 데이터 (선택된 기간 반영)
 @st.cache_data(ttl=3600)
-def get_market_data():
+def get_market_data(start_date_str):
     data = {}
     for name, ticker in INDICES.items():
-        df = yf.download(ticker, start=start_date_ytd, progress=False)
+        df = yf.download(ticker, start=start_date_str, progress=False)
         if not df.empty:
             df = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
-            close = df.iloc[:, 0]
-            ytd = ((close / close.iloc[0]) - 1) * 100
-            dd = ((close / close.cummax()) - 1) * 100
-            data[name] = pd.DataFrame({'Close': close, 'YTD': ytd, 'DD': dd})
+            close = df.iloc[:, 0].dropna()
+            if len(close) > 0:
+                ret = ((close / close.iloc[0]) - 1) * 100
+                dd = ((close / close.cummax()) - 1) * 100
+                data[name] = pd.DataFrame({'Close': close, 'Return': ret, 'DD': dd})
     return data
 
-# 💡 환율 & 원자재 데이터 (가격과 DD를 함께 반환하도록 수정)
 @st.cache_data(ttl=3600)
 def get_fx_long_data(tickers_dict, start_date_str):
     data = {}
@@ -132,11 +147,11 @@ def get_fx_long_data(tickers_dict, start_date_str):
             data[name] = pd.DataFrame({'Close': close, 'DD': dd})
     return data
 
+# 💡 Page 3 매크로 상관관계 데이터 (선택된 기간 반영)
 @st.cache_data(ttl=3600)
-def get_macro_correlation_data():
-    start_long = "2000-01-01"
-    df_kospi = yf.download("^KS11", start=start_long, progress=False)
-    df_tnx = yf.download("^TNX", start=start_long, progress=False)
+def get_macro_correlation_data(start_date_str):
+    df_kospi = yf.download("^KS11", start=start_date_str, progress=False)
+    df_tnx = yf.download("^TNX", start=start_date_str, progress=False)
     close_kospi = df_kospi['Close'].iloc[:, 0] if isinstance(df_kospi.columns, pd.MultiIndex) else df_kospi['Close']
     close_tnx = df_tnx['Close'].iloc[:, 0] if isinstance(df_tnx.columns, pd.MultiIndex) else df_tnx['Close']
     return pd.DataFrame({'KOSPI': close_kospi, 'US10Y': close_tnx}).dropna()
@@ -249,20 +264,31 @@ with tab_home:
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# [Page 1] 주가지수 화면
+# [Page 1] 주가지수 화면 (기간 선택 단추 추가)
 # ==========================================
 with tab1:
-    st.subheader("글로벌 주요 주가지수 YTD & MDD")
+    st.subheader("글로벌 주요 주가지수 기간별 수익률 & MDD")
+    
+    period_option_1 = st.radio(
+        "조회 기간을 선택하세요:",
+        options=["1년", "3년", "5년", "10년", "20년", "Max"],
+        index=0, # 기본값 1년
+        horizontal=True,
+        key="market_period_selector"
+    )
+    start_date_1 = get_start_date(period_option_1)
+    market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
+    
     cols1 = st.columns(2)
-    for idx, (name, df) in enumerate(get_market_data().items()):
+    for idx, (name, df) in enumerate(market_data.items()):
         with cols1[idx % 2]:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(width=2)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Return'], name="수익률 %", line=dict(width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | 기간수익: {df['Return'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
-            fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
-            fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
+            fig.update_yaxes(title_text="수익률 (%)", secondary_y=False)
+            fig.update_yaxes(title_text="DD (%)", range=[-65, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
@@ -271,29 +297,15 @@ with tab1:
 with tab2:
     st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
     
-    period_option = st.radio(
+    period_option_2 = st.radio(
         "조회 기간을 선택하세요:",
         options=["1년", "3년", "5년", "10년", "20년", "Max"],
-        index=5,
+        index=5, # 기본값 Max
         horizontal=True,
         key="fx_period_selector"
     )
-    
-    today = datetime.date.today()
-    if period_option == "1년":
-        start_date = today - datetime.timedelta(days=365)
-    elif period_option == "3년":
-        start_date = today - datetime.timedelta(days=365 * 3)
-    elif period_option == "5년":
-        start_date = today - datetime.timedelta(days=365 * 5)
-    elif period_option == "10년":
-        start_date = today - datetime.timedelta(days=365 * 10)
-    elif period_option == "20년":
-        start_date = today - datetime.timedelta(days=365 * 20)
-    else:
-        start_date = datetime.date(2000, 1, 1)
-        
-    fx_data_dict = get_fx_long_data(FX_TICKERS, start_date.strftime("%Y-%m-%d"))
+    start_date_2 = get_start_date(period_option_2)
+    fx_data_dict = get_fx_long_data(FX_TICKERS, start_date_2.strftime("%Y-%m-%d"))
     
     cols2 = st.columns(2)
     for idx, (name, df_fx) in enumerate(fx_data_dict.items()):
@@ -303,9 +315,7 @@ with tab2:
             line_color = '#b22222' if "WTI" in name else 'royalblue'
             dd_range = [-60, 5] if "WTI" in name else [-25, 2]
             
-            # 좌측 Y축: 절대 가격
             fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['Close'], name="가격", line=dict(color=line_color, width=2)), secondary_y=False)
-            # 우측 Y축: Drawdown (MDD)
             fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
             
             latest_val = df_fx['Close'].iloc[-1]
@@ -322,11 +332,21 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 3] 매크로 상관관계 (코스피 vs 국채금리)
+# [Page 3] 매크로 상관관계 (기간 선택 단추 추가)
 # ==========================================
 with tab3:
-    st.subheader("금리와 코스피 장기 추이 (2000년 ~ 현재)")
-    df_macro = get_macro_correlation_data()
+    st.subheader("금리와 코스피 장기 추이")
+    
+    period_option_3 = st.radio(
+        "조회 기간을 선택하세요:",
+        options=["1년", "3년", "5년", "10년", "20년", "Max"],
+        index=5, # 기본값 Max (2000년부터)
+        horizontal=True,
+        key="macro_period_selector"
+    )
+    start_date_3 = get_start_date(period_option_3)
+    df_macro = get_macro_correlation_data(start_date_3.strftime("%Y-%m-%d"))
+    
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['US10Y'], name="미국 국채 10년(좌)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['KOSPI'], name="코스피(우)", line=dict(color='black', width=2)), secondary_y=True)
