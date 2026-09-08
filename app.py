@@ -9,7 +9,7 @@ import datetime
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
 st.title("📊 Daily Market & Macro Dashboard")
 
-# 2. 데이터 대상 정의 (Page 1, 2용)
+# 2. 데이터 대상 정의
 INDICES = {
     "코스피": "^KS11", "코스닥": "^KQ11", "S&P 500": "^GSPC",
     "나스닥 종합": "^IXIC", "다우존스 산업": "^DJI",
@@ -34,36 +34,80 @@ def get_summary_table_data():
         "니케이 225": "^N225", "미국 국채 5년": "^FVX",
         "미국 국채 10년": "^TNX", "미국 국채 30년": "^TYX", "달러/원": "KRW=X"
     }
-    
     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
     results = []
-    
     for name, ticker in summary_tickers.items():
         df = yf.download(ticker, start="2023-01-01", progress=False)
         if df.empty: continue
-        
         close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
         close = close.iloc[:, 0]
         
         yearly = close.groupby(close.index.year).last()
-        
         val_23 = yearly.get(2023, None)
         val_24 = yearly.get(2024, None)
         val_25 = yearly.get(2025, None)
         val_today = close.iloc[-1]
         
         ytd = ((val_today / val_25) - 1) * 100 if pd.notna(val_25) and val_25 != 0 else 0
-            
         results.append({
-            "최근": name,
-            "2023 종가": val_23,
-            "2024 종가": val_24,
-            "2025 종가": val_25,
-            today_str: val_today,
-            "YTD": ytd
+            "최근": name, "2023 종가": val_23, "2024 종가": val_24,
+            "2025 종가": val_25, today_str: val_today, "YTD": ytd
         })
-        
     return pd.DataFrame(results), today_str
+
+# [NEW] 코스피 월별 수익률 히트맵 계산 엔진 (매달/매년 자동 갱신 구조)
+@st.cache_data(ttl=3600)
+def get_kospi_heatmap_data():
+    # 야후 파이낸스의 한계로 1996년 말부터 데이터 수집 가능
+    df = yf.download("^KS11", start="1996-12-01", progress=False)
+    if df.empty: return pd.DataFrame()
+    
+    close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
+    close = close.iloc[:, 0]
+    
+    # 월말 종가 및 수익률
+    monthly_close = close.resample('ME').last()
+    monthly_ret = monthly_close.pct_change() * 100
+    
+    # 연말 종가 및 연간 수익률
+    yearly_close = close.resample('YE').last()
+    yearly_ret = yearly_close.pct_change() * 100
+    yearly_ret.index = yearly_ret.index.year
+    
+    df_ret = pd.DataFrame({'Return': monthly_ret})
+    df_ret['Year'] = df_ret.index.year
+    df_ret['Month'] = df_ret.index.month
+    
+    # 연도별-월별 피벗 테이블 생성
+    pivot = df_ret.pivot(index='Year', columns='Month', values='Return')
+    
+    # 항상 1~12월 컬럼이 보이도록 보장 (미래 월은 빈칸 처리)
+    cols = list(range(1, 13))
+    pivot = pivot.reindex(columns=cols)
+    pivot['연간수익'] = yearly_ret
+    
+    # 데이터가 온전한 1997년부터 표시
+    pivot = pivot[pivot.index >= 1997]
+    
+    # 하단 요약 통계 계산
+    avg_all = pivot.mean()
+    avg_2000 = pivot[pivot.index >= 2000].mean()
+    avg_2010 = pivot[pivot.index >= 2010].mean()
+    avg_2020 = pivot[pivot.index >= 2020].mean()
+    
+    pos_count = (pivot > 0).sum()
+    total_count = pivot.notna().sum()
+    win_rate = (pos_count / total_count) * 100
+    
+    summary = pd.DataFrame([
+        avg_all, avg_2000, avg_2010, avg_2020, pos_count, total_count, win_rate
+    ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승횟수', '총횟수', '상승확률'])
+    
+    full_df = pd.concat([pivot, summary])
+    
+    # 스트림릿 표기용 컬럼명 (숫자 1,2 대신 1월, 2월 형식)
+    full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
+    return full_df
 
 @st.cache_data(ttl=3600)
 def get_market_data():
@@ -94,7 +138,6 @@ def get_fx_data():
             df = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
             close = df.iloc[:, 0]
             if ticker == "JPYKRW=X": close = close * 100
-                
         if len(close) > 0:
             ytd = ((close / close.iloc[0]) - 1) * 100
             dd = ((close / close.cummax()) - 1) * 100
@@ -106,49 +149,79 @@ def get_macro_correlation_data():
     start_long = "2000-01-01"
     df_kospi = yf.download("^KS11", start=start_long, progress=False)
     df_tnx = yf.download("^TNX", start=start_long, progress=False)
-    
     close_kospi = df_kospi['Close'].iloc[:, 0] if isinstance(df_kospi.columns, pd.MultiIndex) else df_kospi['Close']
     close_tnx = df_tnx['Close'].iloc[:, 0] if isinstance(df_tnx.columns, pd.MultiIndex) else df_tnx['Close']
-    
     return pd.DataFrame({'KOSPI': close_kospi, 'US10Y': close_tnx}).dropna()
 
+@st.cache_data(ttl=3600)
+def get_us_bonds_data():
+    bond_tickers = {"5년물": "^FVX", "10년물": "^TNX", "30년물": "^TYX"}
+    start_long = "2000-01-01"
+    data = {}
+    for name, ticker in bond_tickers.items():
+        df = yf.download(ticker, start=start_long, progress=False)
+        if not df.empty:
+            df = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
+            data[name] = df.iloc[:, 0]
+    return data
 
-# 4. 탭 화면 4개로 나누기!
-tab_home, tab1, tab2, tab3 = st.tabs(["🏠 Home: 시장 요약", "📈 Page 1: 주가지수", "💱 Page 2: 글로벌 환율", "🇺🇸🇰🇷 Page 3: 매크로 상관관계"])
+# 4. 탭 화면 구성
+tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "🇺🇸🇰🇷 Page 3: 상관관계", "🇺🇸 Page 4: 미국 국채"])
 
 # ==========================================
-# [Home] 연도별 종가 요약 테이블
+# [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    st.subheader("최근 3년 & YTD 글로벌 시장 요약")
-    
-    # 💡 [핵심 변경 사항] 화면을 2개의 단(왼쪽, 오른쪽)으로 분할
     col_left, col_right = st.columns(2)
     
-    # 표는 왼쪽 단에만 배치
+    # 1. 왼쪽: 요약 테이블
     with col_left:
+        st.subheader("최근 3년 & YTD 글로벌 시장 요약")
         df_summary, today_col = get_summary_table_data()
-        
         def highlight_ytd(val):
             color = '#ffcccc' if val < 0 else '#ccffcc'
             return f'background-color: {color}'
-
         formatted_df = df_summary.style.format({
-            "2023 종가": "{:,.2f}",
-            "2024 종가": "{:,.2f}",
-            "2025 종가": "{:,.2f}",
-            today_col: "{:,.2f}",
-            "YTD": "{:+.2f}%"
+            "2023 종가": "{:,.2f}", "2024 종가": "{:,.2f}", "2025 종가": "{:,.2f}",
+            today_col: "{:,.2f}", "YTD": "{:+.2f}%"
         }).map(highlight_ytd, subset=['YTD'])
-        
         st.dataframe(formatted_df, use_container_width=True, hide_index=True)
         
-    # 오른쪽 단은 향후 위젯을 위해 안내문만 남겨두고 비워둠
+    # 2. 오른쪽: [NEW] 코스피 월별 수익률 히트맵
     with col_right:
-        st.info("💡 나중에 이곳에 새로운 위젯이나 차트를 추가할 수 있습니다.")
+        st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
+        
+        full_df = get_kospi_heatmap_data()
+        
+        # 글자 표기와 색상을 분리하여 깔끔하게 적용하는 로직
+        formatted_str_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
+        styles_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
+        
+        for row in full_df.index:
+            for col in full_df.columns:
+                val = full_df.loc[row, col]
+                if pd.isna(val): continue
+                
+                # 글자 포맷 (.0f 또는 .1f%)
+                if row in ['상승횟수', '총횟수']:
+                    formatted_str_df.loc[row, col] = f"{val:.0f}"
+                else:
+                    formatted_str_df.loc[row, col] = f"{val:.1f}%"
+                    
+                # 배경색 포맷 (상승/하락 강도에 따라 투명도 조절)
+                if row not in ['상승횟수', '총횟수']:
+                    intensity = min(abs(val) / 12.0, 1.0) # 12% 이상이면 가장 진한 색
+                    if val > 0:
+                        styles_df.loc[row, col] = f'background-color: rgba(255, 99, 71, {intensity})'
+                    elif val < 0:
+                        styles_df.loc[row, col] = f'background-color: rgba(100, 149, 237, {intensity})'
+        
+        # 적용 및 화면 출력 (높이를 넉넉히 잡아 스크롤하기 편하게 설정)
+        styled_heatmap = formatted_str_df.style.apply(lambda _: styles_df, axis=None)
+        st.dataframe(styled_heatmap, use_container_width=True, height=650)
 
 # ==========================================
-# [Page 1] 주가지수 화면
+# 이하 Page 1 ~ Page 4 코드는 어제와 동일하게 유지됩니다.
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 YTD & MDD")
@@ -164,9 +237,6 @@ with tab1:
             fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
-# ==========================================
-# [Page 2] 환율 화면
-# ==========================================
 with tab2:
     st.subheader("주요 통화 환율 & 달러 인덱스")
     cols2 = st.columns(2)
@@ -181,9 +251,6 @@ with tab2:
             fig.update_yaxes(title_text="DD (%)", range=[-20, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
-# ==========================================
-# [Page 3] 매크로 상관관계 (코스피 vs 국채금리)
-# ==========================================
 with tab3:
     st.subheader("금리와 코스피 장기 추이 (2000년 ~ 현재)")
     df_macro = get_macro_correlation_data()
@@ -194,3 +261,16 @@ with tab3:
     fig.update_yaxes(title_text="미국 국채 10년 (%)", secondary_y=False)
     fig.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
     st.plotly_chart(fig, use_container_width=True)
+
+with tab4:
+    st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
+    bonds_data = get_us_bonds_data()
+    selected_bond = st.radio("확인할 국채 만기를 선택하세요:", options=["5년물", "10년물", "30년물"], horizontal=True)
+    if selected_bond in bonds_data:
+        df_selected = bonds_data[selected_bond]
+        latest_yield = df_selected.iloc[-1]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_selected.index, y=df_selected.values, name=selected_bond, line=dict(color='#ff7f0e', width=2)))
+        fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)",
+                          height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
+        st.plotly_chart(fig, use_container_width=True)
