@@ -151,8 +151,27 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "Page 3: 상관관계", "Page 4: 미국 국채"])
+# [NEW] Page 5 전용: 미국 경기선행지수(FRED) 및 S&P 500 장기 시계열 수집
+@st.cache_data(ttl=3600)
+def get_market_outlook_data():
+    sp500 = yf.download("^GSPC", start="1960-01-01", progress=False)
+    sp500_close = sp500['Close'] if isinstance(sp500.columns, pd.MultiIndex) else sp500['Close']
+    if isinstance(sp500_close, pd.DataFrame):
+        sp500_close = sp500_close.iloc[:, 0]
+        
+    try:
+        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=USSLIND"
+        df_lei = pd.read_csv(url, index_col=0, parse_dates=True)
+        df_lei = df_lei.replace('.', pd.NA).dropna()
+        df_lei.columns = ['LEI']
+        df_lei['LEI'] = df_lei['LEI'].astype(float)
+    except:
+        df_lei = pd.DataFrame()
+        
+    return sp500_close, df_lei
+
+# 4. 탭 화면 구성 (Page 5 추가)
+tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 시장 시황"])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
@@ -174,13 +193,10 @@ with tab_home:
         
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
-        
         full_df = get_kospi_heatmap_data()
-        
         formatted_str_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         styles_df = pd.DataFrame('', index=full_df.index, columns=full_df.columns)
         
-        # 💡 연간수익 컬럼끼리 독립적으로 히트맵 농도를 계산하기 위한 최대 절대값 산출
         max_annual_abs = full_df['연간수익'].drop(['average', '2000년이후', '2010년이후', '2020년이후', '상승확률'], errors='ignore').abs().max()
         if pd.isna(max_annual_abs) or max_annual_abs == 0: max_annual_abs = 40.0
 
@@ -188,36 +204,23 @@ with tab_home:
             for col in full_df.columns:
                 val = full_df.loc[row, col]
                 if pd.isna(val): continue
-                
                 formatted_str_df.loc[row, col] = f"{val:.1f}%"
-                    
                 bg_color = ""
                 if row == '상승확률':
                     intensity = min(abs(val - 50) / 50.0, 1.0) if pd.notna(val) else 0
-                    if val > 50:
-                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
-                    elif val < 50:
-                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                    if val > 50: bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
+                    elif val < 50: bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
                 else:
                     if col == '연간수익':
-                        # 연간수익끼리 독립적인 기준(max_annual_abs)으로 히트맵 농도 적용
                         intensity = min(abs(val) / max_annual_abs, 1.0)
                     else:
-                        # 월별 데이터는 기존대로 12.0 기준 적용
                         intensity = min(abs(val) / 12.0, 1.0)
-                        
-                    if val > 0:
-                        bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
-                    elif val < 0:
-                        bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
-                
-                if row == 'average':
-                    bg_color += ' border-top: 3px solid #666 !important;'
-                    
+                    if val > 0: bg_color = f'background-color: rgba(255, 99, 71, {intensity}); color: #000;'
+                    elif val < 0: bg_color = f'background-color: rgba(100, 149, 237, {intensity}); color: #000;'
+                if row == 'average': bg_color += ' border-top: 3px solid #666 !important;'
                 styles_df.loc[row, col] = bg_color
                 
         html_table = formatted_str_df.style.apply(lambda _: styles_df, axis=None).to_html()
-        
         target_snippet = ">average<"
         if target_snippet in html_table:
             idx_pos = html_table.find(target_snippet)
@@ -235,10 +238,8 @@ with tab_home:
 .heatmap-container table {{ width: 100%; border-collapse: collapse; font-size: 11.5px; text-align: center; }}
 .heatmap-container th, .heatmap-container td {{ padding: 4px 2px !important; border: 1px solid #e0e0e0; white-space: nowrap; }}
 .heatmap-container th {{ font-weight: bold; }}
-
 .heatmap-container th:first-child, .heatmap-container td:first-child {{ border-right: 3px solid #666 !important; }}
 .heatmap-container th:nth-last-child(2), .heatmap-container td:nth-last-child(2) {{ border-right: 3px solid #666 !important; }}
-
 .heatmap-container th:first-child {{ min-width: 90px !important; text-align: left; padding-left: 8px !important; }}
 .heatmap-container thead th {{ position: sticky; top: 0; background-color: #f0f2f6; z-index: 1; }}
 @media (prefers-color-scheme: dark) {{ .heatmap-container thead th {{ background-color: #0e1117; }} }}
@@ -246,7 +247,6 @@ with tab_home:
 <div class="heatmap-container">
 {html_table}
 </div>"""
-
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
@@ -298,7 +298,7 @@ with tab3:
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 4] 미국 국채 장기 추이 (버튼으로 전환)
+# [Page 4] 미국 국채 장기 추이
 # ==========================================
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
@@ -312,3 +312,44 @@ with tab4:
         fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)",
                           height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
         st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================
+# [NEW] [Page 5] 시장 시황 (미국 경기선행지수 vs S&P 500)
+# ==========================================
+with tab5:
+    st.subheader("🌐 미국 경기선행지수와 미국 주식시장 장기 추이 (1960 ~ 현재)")
+    st.info("💡 거시경제 선행 지표(경기선행지수)와 주식시장(S&P 500, 로그 스케일)의 장기 궤적을 비교하여 경기 침체 및 대세 상승 국면을 입체적으로 분석합니다.")
+    
+    sp500_data, lei_data = get_market_outlook_data()
+    
+    if not sp500_data.empty and not lei_data.empty:
+        df_combined = pd.DataFrame({'SP500': sp500_data}).dropna()
+        df_merged = df_combined.join(lei_data, how='inner').dropna()
+        
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # 좌측 Y축: S&P 500 (로그 스케일 적용)
+        fig.add_trace(
+            go.Scatter(x=df_merged.index, y=df_merged['SP500'], name="S&P 500 (좌, Log)", line=dict(color='#2ca02c', width=2)),
+            secondary_y=False
+        )
+        
+        # 우측 Y축: 미국 경기선행지수
+        fig.add_trace(
+            go.Scatter(x=df_merged.index, y=df_merged['LEI'], name="미국 경기선행지수 (우)", line=dict(color='black', width=2)),
+            secondary_y=True
+        )
+        
+        fig.update_layout(
+            height=650,
+            margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+            yaxis_type="log" # 좌측 Y축 로그 스케일 강제 적용
+        )
+        
+        fig.update_yaxes(title_text="S&P 500 (Log Scale)", secondary_y=False)
+        fig.update_yaxes(title_text="US Leading Economic Index", secondary_y=True)
+        
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("경기선행지수 데이터를 불러오는 중입니다. 잠시 후 새로고침해 주세요.")
