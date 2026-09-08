@@ -24,7 +24,7 @@ FX_TICKERS = {
     "WTI 원유 ($/배럴)": "CL=F"
 }
 
-# 기간 선택에 따른 시작일 계산 헬퍼 함수 (YTD 추가)
+# 기간 선택에 따른 시작일 계산 헬퍼 함수
 def get_start_date(period_option):
     today = datetime.date.today()
     if period_option == "YTD":
@@ -112,7 +112,6 @@ def get_kospi_heatmap_data():
     full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
     return full_df
 
-# 💡 Page 1 주가지수 데이터 (일반 지수 및 DD 반환)
 @st.cache_data(ttl=3600)
 def get_market_data(start_date_str):
     data = {}
@@ -264,27 +263,39 @@ with tab_home:
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# [Page 1] 주가지수 화면 (일반 지수 및 YTD 버튼 추가)
+# [Page 1] 주가지수 화면 (기간 선택 + 선형/로그 축 변환 추가)
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
     
-    period_option_1 = st.radio(
-        "조회 기간을 선택하세요:",
-        options=["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
-        index=0,
-        horizontal=True,
-        key="market_period_selector"
-    )
+    col_p1, col_s1 = st.columns([2, 1])
+    with col_p1:
+        period_option_1 = st.radio(
+            "조회 기간을 선택하세요:",
+            options=["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
+            index=0,
+            horizontal=True,
+            key="market_period_selector"
+        )
+    with col_s1:
+        scale_option_1 = st.radio(
+            "차트 축 스케일 선택:",
+            options=["선형 축 (Linear)", "로그 축 (Log)"],
+            index=0,
+            horizontal=True,
+            key="market_scale_selector"
+        )
+        
     start_date_1 = get_start_date(period_option_1)
     market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
+    is_log_scale = "로그" in scale_option_1
     
     cols1 = st.columns(2)
     for idx, (name, df_m) in enumerate(market_data.items()):
         with cols1[idx % 2]:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # 좌측 Y축: 일반 지수 절대값
+            # 좌측 Y축: 일반 지수 절대값 (선형/로그 동적 반영)
             fig.add_trace(go.Scatter(x=df_m.index, y=df_m['Close'], name="지수", line=dict(width=2)), secondary_y=False)
             # 우측 Y축: Drawdown (MDD)
             fig.add_trace(go.Scatter(x=df_m.index, y=df_m['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
@@ -294,12 +305,12 @@ with tab1:
             
             fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
-            fig.update_yaxes(title_text="지수 (pt)", secondary_y=False)
+            fig.update_yaxes(title_text="지수 (pt)", type="log" if is_log_scale else "linear", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-65, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 2] 환율 & 원자재 화면 (YTD 추가)
+# [Page 2] 환율 & 원자재 화면
 # ==========================================
 with tab2:
     st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
@@ -339,7 +350,7 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 3] 매크로 상관관계 (YTD 추가)
+# [Page 3] 매크로 상관관계
 # ==========================================
 with tab3:
     st.subheader("금리와 코스피 장기 추이")
