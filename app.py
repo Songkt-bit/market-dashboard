@@ -157,7 +157,7 @@ def get_us_bonds_data():
     return data
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", "🇺🇸🇰🇷 Page 3: 상관관계", "🇺🇸 Page 4: 미국 국채"])
+tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율", " Page 3: 상관관계", " Page 4: 미국 국채"])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
