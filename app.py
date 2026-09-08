@@ -109,26 +109,27 @@ def get_market_data():
             data[name] = pd.DataFrame({'Close': close, 'YTD': ytd, 'DD': dd})
     return data
 
-# 💡 환율 & 원자재 데이터를 2000년부터 가져오도록 수정 (MDD 계산 제거)
+# 💡 환율 & 원자재 데이터 (가격과 DD를 함께 반환하도록 수정)
 @st.cache_data(ttl=3600)
-def get_fx_long_data(tickers_dict):
-    start_long = "2000-01-01"
+def get_fx_long_data(tickers_dict, start_date_str):
     data = {}
     for name, ticker in tickers_dict.items():
         if ticker == "SYNTHETIC_CNYKRW":
-            df_krw = yf.download("KRW=X", start=start_long, progress=False)
-            df_cny = yf.download("CNY=X", start=start_long, progress=False)
+            df_krw = yf.download("KRW=X", start=start_date_str, progress=False)
+            df_cny = yf.download("CNY=X", start=start_date_str, progress=False)
             close_krw = df_krw['Close'].iloc[:, 0] if isinstance(df_krw.columns, pd.MultiIndex) else df_krw['Close']
             close_cny = df_cny['Close'].iloc[:, 0] if isinstance(df_cny.columns, pd.MultiIndex) else df_cny['Close']
             close = (close_krw / close_cny).dropna()
         else:
-            df = yf.download(ticker, start=start_long, progress=False)
+            df = yf.download(ticker, start=start_date_str, progress=False)
             if df.empty: continue
             df = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
             close = df.iloc[:, 0]
             if ticker == "JPYKRW=X": close = close * 100
         if len(close) > 0:
-            data[name] = close.dropna()
+            close = close.dropna()
+            dd = ((close / close.cummax()) - 1) * 100
+            data[name] = pd.DataFrame({'Close': close, 'DD': dd})
     return data
 
 @st.cache_data(ttl=3600)
@@ -258,38 +259,66 @@ with tab1:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(go.Scatter(x=df.index, y=df['YTD'], name="YTD %", line=dict(width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df.index, y=df['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:,.2f}%",
+            fig.update_layout(title=f"<b>{name}</b> ({df['Close'].iloc[-1]:,.2f}) | YTD: {df['YTD'].iloc[-1]:+.2f}% | DD: {df['DD'].iloc[-1]:+.2f}%",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="YTD (%)", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-45, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 2] 환율 & 원자재 화면 (2000년~현재, 절대 가격, MDD 삭제, WTI 적갈색 적용)
+# [Page 2] 환율 & 원자재 화면 (기간 선택 단추 + MDD 추가)
 # ==========================================
 with tab2:
-    st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 장기 추이 (2000년 ~ 현재)")
-    cols2 = st.columns(2)
-    fx_data_dict = get_fx_long_data(FX_TICKERS)
+    st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
     
-    for idx, (name, series) in enumerate(fx_data_dict.items()):
+    period_option = st.radio(
+        "조회 기간을 선택하세요:",
+        options=["1년", "3년", "5년", "10년", "20년", "Max"],
+        index=5,
+        horizontal=True,
+        key="fx_period_selector"
+    )
+    
+    today = datetime.date.today()
+    if period_option == "1년":
+        start_date = today - datetime.timedelta(days=365)
+    elif period_option == "3년":
+        start_date = today - datetime.timedelta(days=365 * 3)
+    elif period_option == "5년":
+        start_date = today - datetime.timedelta(days=365 * 5)
+    elif period_option == "10년":
+        start_date = today - datetime.timedelta(days=365 * 10)
+    elif period_option == "20년":
+        start_date = today - datetime.timedelta(days=365 * 20)
+    else:
+        start_date = datetime.date(2000, 1, 1)
+        
+    fx_data_dict = get_fx_long_data(FX_TICKERS, start_date.strftime("%Y-%m-%d"))
+    
+    cols2 = st.columns(2)
+    for idx, (name, df_fx) in enumerate(fx_data_dict.items()):
         with cols2[idx % 2]:
-            fig = go.Figure()
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # WTI는 적갈색(Firebrick), 나머지는 기본 royalblue
             line_color = '#b22222' if "WTI" in name else 'royalblue'
+            dd_range = [-60, 5] if "WTI" in name else [-25, 2]
             
-            fig.add_trace(go.Scatter(x=series.index, y=series.values, name=name, line=dict(color=line_color, width=2)))
+            # 좌측 Y축: 절대 가격
+            fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['Close'], name="가격", line=dict(color=line_color, width=2)), secondary_y=False)
+            # 우측 Y축: Drawdown (MDD)
+            fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
             
-            latest_val = series.iloc[-1]
+            latest_val = df_fx['Close'].iloc[-1]
+            latest_dd = df_fx['DD'].iloc[-1]
+            
             fig.update_layout(
-                title=f"<b>{name}</b> (현재: {latest_val:,.2f})",
+                title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%",
                 margin=dict(l=20, r=20, t=40, b=20),
-                height=350,
-                showlegend=False,
-                xaxis_title="연도",
-                yaxis_title="가격 / 지수"
+                height=330,
+                showlegend=False
             )
+            fig.update_yaxes(title_text="가격 / 지수", secondary_y=False)
+            fig.update_yaxes(title_text="DD (%)", range=dd_range, secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
