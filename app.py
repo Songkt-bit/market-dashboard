@@ -192,7 +192,6 @@ def get_samsung_disparity_data(start_date_str):
     res_df['Disparity'] = ((res_df['Common'] - res_df['Preferred']) / res_df['Common']) * 100
     return res_df
 
-# 💡 [AUTOMATED] 2026년 주요 매크로 일정 자동 생성 함수 (수동 입력 불필요)
 @st.cache_data(ttl=3600)
 def get_auto_macro_calendar():
     events = [
@@ -316,7 +315,8 @@ with tab1:
             ytd_title_part = ""
             if period_option_1 == "YTD":
                 ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
-                ytd_title_part = f" | YTD: <span style='color:{\"red\" if ytd_val >= 0 else \"blue\"};'>{ytd_val:+.2f}%</span>"
+                c_name = "red" if ytd_val >= 0 else "blue"
+                ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
             fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="지수 (pt)", type="log" if is_log_scale else "linear", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-65, 2], secondary_y=True)
@@ -344,7 +344,8 @@ with tab2:
             ytd_title_part = ""
             if period_option_2 == "YTD":
                 ytd_val = ((latest_val / df_fx['Close'].iloc[0]) - 1) * 100
-                ytd_title_part = f" | YTD: <span style='color:{\"red\" if ytd_val >= 0 else \"blue\"};'>{ytd_val:+.2f}%</span>"
+                c_name = "red" if ytd_val >= 0 else "blue"
+                ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
             fig.update_layout(title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=330, showlegend=False)
             fig.update_yaxes(title_text="가격 / 지수", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=dd_range, secondary_y=True)
@@ -395,30 +396,104 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 괴리율
+# [Page 6] 삼성전자 보통주 vs 우선주 괴리율 및 좁혀짐 구간
 # ==========================================
 with tab6:
-    st.subheader("📉 삼성전자 본주(보통주) vs 우선주 가격 및 괴리율 추이")
-    period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=2, horizontal=True, key="samsung_p6")
+    st.subheader("📉 삼성전자 보통주 vs 우선주 — 괴리율 및 좁혀짐 구간 분석")
+    st.markdown("월평균 괴리율 = `(보통주 − 우선주) / 보통주 × 100`. 차트 배경 음영은 괴리율이 유의미하게 좁혀진 주요 구간을 나타냅니다.")
+    
+    period_option_6 = st.radio(
+        "조회 기간을 선택하세요:",
+        options=["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
+        index=3, # 기본값 10년 (히스토리컬 분석 구간 맞춤)
+        horizontal=True,
+        key="samsung_period_selector"
+    )
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
     
     if not df_samsung.empty:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # 좌측 Y축: 보통주 & 우선주 주가 가격
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
+        
+        # 우측 보조 Y축: 괴리율 (%)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='purple', width=1.5, dash='dot')), secondary_y=True)
+        
+        # HTML 파일에 정의된 주요 괴리율 좁혀짐 구간 데이터 (vrect 활용 음영 추가)
+        episodes = [
+            {"start": "2017-04-01", "end": "2018-02-28", "type": "rally", "name": "동반상승 (우선주 급등)"},
+            {"start": "2018-05-01", "end": "2019-01-31", "type": "decline", "name": "동반하락 (보통주 급락)"},
+            {"start": "2019-03-01", "end": "2020-06-30", "type": "rally", "name": "동반상승 (우선주 급등)"},
+            {"start": "2020-09-01", "end": "2020-12-31", "type": "rally", "name": "동반상승 (우선주 급등)"},
+            {"start": "2021-01-01", "end": "2021-08-31", "type": "decline", "name": "동반하락 (보통주 급락)"},
+            {"start": "2023-11-01", "end": "2024-03-31", "type": "rally", "name": "동반상승 (우선주 급등)"},
+            {"start": "2024-07-01", "end": "2024-11-30", "type": "decline", "name": "동반하락 (보통주 급락)"},
+            {"start": "2026-03-01", "end": "2026-04-30", "type": "rally", "name": "동반상승 (우선주 급등)"},
+            {"start": "2026-05-01", "end": "2026-09-09", "type": "decline", "name": "동반하락 (보통주 급락)"},
+        ]
+
+        # Plotly 배경 음영(vrect) 적용
+        for ep in episodes:
+            fill_color = "rgba(34, 197, 94, 0.15)" if ep["type"] == "rally" else "rgba(249, 115, 22, 0.15)"
+            line_color = "rgba(21, 128, 61, 0.4)" if ep["type"] == "rally" else "rgba(194, 65, 12, 0.4)"
+            
+            fig.add_vrect(
+                x0=ep["start"], x1=ep["end"],
+                fillcolor=fill_color,
+                layer="below", line_width=1,
+                line_dash="dot",
+                line_color=line_color,
+                secondary_y=True
+            )
+
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
-        fig.update_layout(title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", margin=dict(l=20, r=20, t=40, b=20), height=500, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
+        
+        fig.update_layout(
+            title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=550,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
         fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
         fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
+        
+        # 🎨 범례(Legend) UI 추가
+        st.markdown("""
+        <div style="display: flex; gap: 20px; margin-bottom: 15px; font-size: 13px;">
+            <div><span style="display:inline-block; width:14px; height:14px; background:rgba(34,197,94,0.3); border:1px solid #15803d; margin-right:5px; vertical-align:middle;"></span><b>동반상승</b> — 우선주가 더 가파르게 상승하여 괴리율 축소</div>
+            <div><span style="display:inline-block; width:14px; height:14px; background:rgba(249,115,22,0.3); border:1px solid #c2410c; margin-right:5px; vertical-align:middle;"></span><b>동반하락</b> — 보통주가 더 크게 하락하여 괴리율 축소</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-# ==========================================
+        # 📊 하단 상세 분석 표(DataFrame) 구성
+        st.subheader("📋 주요 괴리율 좁혀짐 구간 상세 내역")
+        table_data = [
+            {"구간": "2017.04 → 2018.02", "괴리율": "27.0% → 19.6%", "보통주": "+13.3%", "우선주": "+24.8%", "유형": "동반상승·우선주 급등"},
+            {"구간": "2018.05 → 2019.01", "괴리율": "24.3% → 18.9%", "보통주": "-16.0%", "우선주": "-10.0%", "유형": "동반하락·보통주 급락"},
+            {"구간": "2019.03 → 2020.06", "괴리율": "22.7% → 13.3%", "보통주": "+25.1%", "우선주": "+40.4%", "유형": "동반상승·우선주 급등"},
+            {"구간": "2020.09 → 2020.12", "괴리율": "16.3% → 8.1%",  "보통주": "+24.1%", "우선주": "+36.3%", "유형": "동반상승·우선주 급등"},
+            {"구간": "2021.01 → 2021.08", "괴리율": "13.6% → 8.3%",  "보통주": "-16.0%", "우선주": "-10.9%", "유형": "동반하락·보통주 급락"},
+            {"구간": "2023.11 → 2024.03", "괴리율": "21.2% → 15.0%", "보통주": "+2.7%",  "우선주": "+10.8%", "유형": "동반상승·우선주 급등"},
+            {"구간": "2024.07 → 2024.11", "괴리율": "22.3% → 15.1%", "보통주": "-30.3%", "우선주": "-23.8%", "유형": "동반하락·보통주 급락"},
+            {"구간": "2026.03 → 2026.04", "괴리율": "33.9% → 28.0%", "보통주": "+14.0%", "우선주": "+24.2%", "유형": "동반상승·우선주 급등"},
+            {"구간": "2026.05 → 2026.09*", "괴리율": "36.2% → 26.4%", "보통주": "-14.9%", "우선주": "-1.9%", "유형": "동반하락·보통주 급락"},
+        ]
+        df_table = pd.DataFrame(table_data)
+        st.dataframe(df_table, use_container_width=True, hide_index=True)
+        
+        st.markdown("""
+        <div style="font-size: 11.5px; color: #78716c; margin-top: 5px; line-height: 1.5;">
+        * 두 유형 모두 "괴리율 축소 = 우선주의 상대적 강세"라는 공통점이 있지만, 초록(동반상승)은 둘 다 오르는 국면에서 우선주가 더 빠르게 따라붙는 경우이고, 주황(동반하락)은 둘 다 빠지는 국면에서 보통주가 더 크게 무너지며 좁혀지는 경우입니다.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")# ==========================================
 # [Page 7] 금융 소식 캘린더 (자동 생성 방식 적용)
 # ==========================================
 with tab7:
@@ -443,13 +518,11 @@ with tab7:
         if selected_cat != "전체":
             df_display = df_display[df_display['Category'] == selected_cat]
             
-        # 화면에 보여줄 컬럼 정리
         df_show = df_display[['Date', 'Category', 'Title', 'Details', 'D-day']].rename(columns={'Date': '날짜', 'Category': '분류', 'Title': '일정명', 'Details': '출처/시간'})
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
     with col_cal_right:
         st.markdown("### 🔥 다가오는 핵심 일정 (Key Events)")
-        # 다가오는 핵심 일정 필터 (D-day가 오늘 기준 0 이상이거나 임박한 것들)
         core_events = df_cal[(df_cal['IsCore'] == '핵심') & (df_cal['D-day'] >= -1)].sort_values('D-day').head(4)
         
         if not core_events.empty:
