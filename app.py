@@ -167,8 +167,18 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", "Page 3: 상관관계", "Page 4: 미국 국채"])
+# 💡 [NEW] 구글 시트 CSV 연동 함수 (D램 가격 데이터)
+@st.cache_data(ttl=3600)
+def get_dram_csv_data():
+    csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRyxRDpITzRJmbQ1XPnJHazHIq0IIr1DpeetgocahZipL64gDJYM_0H3JjFNv91C21t17TdCG9H-AHd/pub?gid=746668639&single=true&output=csv"
+    try:
+        df = pd.read_csv(csv_url)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+# 4. 탭 화면 구성 (Page 5 추가)
+tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)"])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
@@ -263,7 +273,7 @@ with tab_home:
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# [Page 1] 주가지수 화면 (기간 선택 + 선형/로그 축 변환 추가)
+# [Page 1] 주가지수 화면
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
@@ -294,10 +304,7 @@ with tab1:
     for idx, (name, df_m) in enumerate(market_data.items()):
         with cols1[idx % 2]:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-            
-            # 좌측 Y축: 일반 지수 절대값 (선형/로그 동적 반영)
             fig.add_trace(go.Scatter(x=df_m.index, y=df_m['Close'], name="지수", line=dict(width=2)), secondary_y=False)
-            # 우측 Y축: Drawdown (MDD)
             fig.add_trace(go.Scatter(x=df_m.index, y=df_m['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
             
             latest_close = df_m['Close'].iloc[-1]
@@ -374,7 +381,7 @@ with tab3:
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 4] 미국 국채 장기 추이 (버튼으로 전환)
+# [Page 4] 미국 국채 장기 추이
 # ==========================================
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
@@ -388,3 +395,16 @@ with tab4:
         fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)",
                           height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
         st.plotly_chart(fig, use_container_width=True)
+
+# ==========================================
+# [NEW] [Page 5] 반도체(D램) 가격 추이 (구글 시트 연동)
+# ==========================================
+with tab5:
+    st.subheader("💾 D램 현물 및 고정거래 가격 추이 (구글 시트 연동)")
+    st.info("💡 구글 시트에 실시간 연동된 D램 가격 및 변동성 데이터를 불러와 시각화합니다.")
+    
+    df_dram = get_dram_csv_data()
+    if not df_dram.empty:
+        st.dataframe(df_dram, use_container_width=True)
+    else:
+        st.warning("구글 시트 데이터를 불러오지 못했습니다. 링크 주소나 구글 시트의 '웹에 게시(CSV)' 설정을 확인해 주세요.")
