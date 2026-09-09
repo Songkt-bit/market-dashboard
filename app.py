@@ -183,8 +183,36 @@ def get_dram_csv_data():
     except Exception as e:
         return pd.DataFrame()
 
-# 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)"])
+# 💡 [NEW] 삼성전자 본주(보통주) 및 우선주 괴리율 데이터 수집 함수
+@st.cache_data(ttl=3600)
+def get_samsung_disparity_data(start_date_str):
+    df = yf.download(["005930.KS", "005935.KS"], start=start_date_str, progress=False)
+    if df.empty: return pd.DataFrame()
+    
+    if isinstance(df.columns, pd.MultiIndex):
+        try: close_df = df['Close']
+        except KeyError: close_df = df.iloc[:, :2]
+    else:
+        close_df = df[['Close']]
+        
+    if '005930.KS' in close_df.columns and '005935.KS' in close_df.columns:
+        common = close_df['005930.KS']
+        pref = close_df['005935.KS']
+    else:
+        cols = close_df.columns
+        common = close_df[cols[0]]
+        pref = close_df[cols[1]]
+        
+    res_df = pd.DataFrame({'Common': common, 'Preferred': pref}).dropna()
+    # 괴리율 계산 공식: ((보통주 - 우선주) / 보통주) * 100
+    res_df['Disparity'] = ((res_df['Common'] - res_df['Preferred']) / res_df['Common']) * 100
+    return res_df
+
+# 4. 탭 화면 구성 (Page 6 추가)
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
+    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", "📉 Page 6: 삼성전자 괴리율"
+])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
@@ -279,7 +307,7 @@ with tab_home:
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# [Page 1] 주가지수 화면 (YTD 선택 시 제목에 색상 적용된 YTD 표시)
+# [Page 1] 주가지수 화면
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
@@ -316,7 +344,6 @@ with tab1:
             latest_close = df_m['Close'].iloc[-1]
             latest_dd = df_m['DD'].iloc[-1]
             
-            # 💡 YTD 선택 시 DD 옆에 색상별 YTD 추가 (+ 빨간색, - 파란색)
             ytd_title_part = ""
             if period_option_1 == "YTD":
                 ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
@@ -330,7 +357,7 @@ with tab1:
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 2] 환율 & 원자재 화면 (YTD 선택 시 제목에 색상 적용된 YTD 표시)
+# [Page 2] 환율 & 원자재 화면
 # ==========================================
 with tab2:
     st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
@@ -359,7 +386,6 @@ with tab2:
             latest_val = df_fx['Close'].iloc[-1]
             latest_dd = df_fx['DD'].iloc[-1]
             
-            # 💡 YTD 선택 시 DD 옆에 색상별 YTD 추가 (+ 빨간색, - 파란색)
             ytd_title_part = ""
             if period_option_2 == "YTD":
                 ytd_val = ((latest_val / df_fx['Close'].iloc[0]) - 1) * 100
@@ -428,3 +454,45 @@ with tab5:
         st.dataframe(df_dram, use_container_width=True)
     else:
         st.warning("구글 시트 데이터를 불러오지 못했습니다. 링크 주소나 구글 시트의 '웹에 게시(CSV)' 설정을 확인해 주세요.")
+
+# ==========================================
+# [NEW] [Page 6] 삼성전자 보통주 vs 우선주 괴리율 차트
+# ==========================================
+with tab6:
+    st.subheader("📉 삼성전자 본주(보통주) vs 우선주 가격 및 괴리율 추이")
+    
+    period_option_6 = st.radio(
+        "조회 기간을 선택하세요:",
+        options=["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
+        index=2, # 기본값 5년
+        horizontal=True,
+        key="samsung_period_selector"
+    )
+    start_date_6 = get_start_date(period_option_6)
+    df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
+    
+    if not df_samsung.empty:
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # 좌측 Y축: 보통주 & 우선주 주가 가격
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
+        
+        # 우측 보조 Y축: 괴리율 (%)
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='purple', width=1.5, dash='dot')), secondary_y=True)
+        
+        latest_common = df_samsung['Common'].iloc[-1]
+        latest_pref = df_samsung['Preferred'].iloc[-1]
+        latest_disp = df_samsung['Disparity'].iloc[-1]
+        
+        fig.update_layout(
+            title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=500,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
+        fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
+        fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
