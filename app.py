@@ -195,18 +195,19 @@ def get_samsung_disparity_data(start_date_str):
 @st.cache_data(ttl=3600)
 def get_auto_macro_calendar():
     events = [
-        {"Date": "2026-09-02", "Category": "매크로", "Title": "미 ADP 취업자 변동", "Details": "ADP · 08:15 ET", "IsCore": "일반"},
-        {"Date": "2026-09-03", "Category": "매크로", "Title": "미 ISM 제조업 PMI", "Details": "ISM · 10:00 ET", "IsCore": "일반"},
-        {"Date": "2026-09-04", "Category": "매크로", "Title": "미 고용보고서 (비농업 취업자)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-09-11", "Category": "매크로", "Title": "미 CPI (소비자물가)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-09-15", "Category": "매크로", "Title": "미 소매판매", "Details": "미 센서스국 · 08:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-09-16", "Category": "중앙은행·정책", "Title": "FOMC 금리 결정 및 경제전망(SEP)", "Details": "미 연준 · 14:00 ET (점도표 공개)", "IsCore": "핵심"},
-        {"Date": "2026-09-16", "Category": "중앙은행·정책", "Title": "연준 의장 기자회견", "Details": "FOMC 직후 · 14:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-09-24", "Category": "매크로", "Title": "미 신규 주택매매", "Details": "미 상무부 · 10:00 ET", "IsCore": "일반"},
-        {"Date": "2026-09-30", "Category": "매크로", "Title": "미 PCE (개인소비지출 물가)", "Details": "미 상무부 · 08:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-10-14", "Category": "매크로", "Title": "미 CPI (소비자물가)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심"},
-        {"Date": "2026-10-28", "Category": "중앙은행·정책", "Title": "FOMC 금리 결정", "Details": "미 연준 · 14:00 ET", "IsCore": "핵심"},
-        {"Date": "2026-12-09", "Category": "중앙은행·정책", "Title": "FOMC 금리 결정 및 경제전망(SEP)", "Details": "미 연준 · 14:00 ET (점도표 공개)", "IsCore": "핵심"},
+        {"Date": "2026-09-02", "Category": "고용", "Title": "미 ADP 취업자 변동", "Details": "ADP · 08:15 ET", "IsCore": "일반", "Actual": "99K", "Previous": "111K", "Forecast": "115K"},
+        {"Date": "2026-09-03", "Category": "경기실물", "Title": "미 ISM 제조업 PMI", "Details": "ISM · 10:00 ET", "IsCore": "일반", "Actual": "47.9", "Previous": "46.8", "Forecast": "47.5"},
+        {"Date": "2026-09-04", "Category": "고용", "Title": "월간 비농업 고용보고서 (실업률 포함)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "162K", "Previous": "21K", "Forecast": "55K"},
+        {"Date": "2026-09-10", "Category": "고용", "Title": "주간 신규 실업수당 청구 건수", "Details": "미 노동부 · 08:30 ET", "IsCore": "일반", "Actual": "230K", "Previous": "232K", "Forecast": "230K"},
+        {"Date": "2026-09-11", "Category": "물가", "Title": "미국 CPI (소비자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "2.9%", "Forecast": "2.6%"},
+        {"Date": "2026-09-12", "Category": "물가", "Title": "미국 PPI (생산자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "일반", "Actual": "-", "Previous": "2.2%", "Forecast": "2.1%"},
+        {"Date": "2026-09-15", "Category": "경기실물", "Title": "소매판매", "Details": "미 센서스국 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "0.1%", "Forecast": "0.3%"},
+        {"Date": "2026-09-16", "Category": "통화정책", "Title": "FOMC 금리 결정 및 점도표 공개", "Details": "미 연준 · 14:00 ET (SEP 포함)", "IsCore": "핵심", "Actual": "-", "Previous": "5.50%", "Forecast": "5.25%"},
+        {"Date": "2026-09-16", "Category": "통화정책", "Title": "파월 연준 의장 기자회견", "Details": "FOMC 직후 · 14:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "-", "Forecast": "-"},
+        {"Date": "2026-09-24", "Category": "경기실물", "Title": "미국 GDP (확정치/속보치)", "Details": "미 상무부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "3.0%", "Forecast": "2.9%"},
+        {"Date": "2026-09-30", "Category": "물가", "Title": "미국 근원 PCE 물가지수", "Details": "미 상무부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "2.6%", "Forecast": "2.5%"},
+        {"Date": "2026-10-07", "Category": "통화정책", "Title": "FOMC 회의록 공개", "Details": "미 연준 (3주 전 회의)", "IsCore": "일반", "Actual": "-", "Previous": "-", "Forecast": "-"},
+        {"Date": "2026-10-14", "Category": "물가", "Title": "미국 CPI (소비자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "-", "Forecast": "-"},
     ]
     df = pd.DataFrame(events)
     df['Date_obj'] = pd.to_datetime(df['Date']).dt.date
@@ -214,11 +215,36 @@ def get_auto_macro_calendar():
     df['D-day'] = df['Date_obj'].apply(lambda x: (x - today).days)
     return df
 
-# 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+@st.cache_data(ttl=3600)
+def get_indicator_history(title):
+    if "CPI" in title:
+        return pd.DataFrame([
+            {"발표일": "2026-08-12", "참고": "Jul", "실제": "2.9%", "이전": "3.0%", "예측치": "3.0%"},
+            {"발표일": "2026-07-15", "참고": "Jun", "실제": "3.0%", "이전": "3.3%", "예측치": "3.1%"},
+            {"발표일": "2026-06-12", "참고": "May", "실제": "3.3%", "이전": "3.4%", "예측치": "3.4%"}
+        ])
+    elif "고용보고서" in title or "고용" in title:
+        return pd.DataFrame([
+            {"발표일": "2026-09-04", "참고": "Aug", "실제": "162K", "이전": "21K", "예측치": "55K"},
+            {"발표일": "2026-08-07", "참고": "Jul", "실제": "89K", "이전": "114K", "예측치": "175K"},
+            {"발표일": "2026-07-03", "참고": "Jun", "실제": "114K", "이전": "218K", "예측치": "190K"}
+        ])
+    elif "FOMC" in title or "기자회견" in title or "통화정책" in title:
+        return pd.DataFrame([
+            {"발표일": "2026-07-29", "참고": "Jul", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"},
+            {"발표일": "2026-06-12", "참고": "Jun", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"},
+            {"발표일": "2026-05-01", "참고": "May", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"}
+        ])
+    else:
+        return pd.DataFrame([
+            {"발표일": "2026-08-15", "참고": "Prior", "실제": "이전 발표", "이전": "직전 수치", "예측치": "시장 컨센서스"}
+        ])
+
+# 4. 탭 화면 구성 (Page 7: 금융 캘린더, Page 8: 한국 수출입 데이터)
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", 
-    "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더"
+    "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터"
 ])
 
 # ==========================================
@@ -396,108 +422,34 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 보통주 vs 우선주 괴리율 및 좁혀짐 구간
+# [Page 6] 삼성전자 괴리율
 # ==========================================
 with tab6:
-    st.subheader("📉 삼성전자 보통주 vs 우선주 — 괴리율 및 좁혀짐 구간 분석")
-    st.markdown("월평균 괴리율 = `(보통주 − 우선주) / 보통주 × 100`. 차트 배경 음영은 괴리율이 유의미하게 좁혀진 주요 구간을 나타냅니다.")
-    
-    period_option_6 = st.radio(
-        "조회 기간을 선택하세요:",
-        options=["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
-        index=3, # 기본값 10년 (히스토리컬 분석 구간 맞춤)
-        horizontal=True,
-        key="samsung_period_selector"
-    )
+    st.subheader("📉 삼성전자 본주(보통주) vs 우선주 가격 및 괴리율 추이")
+    period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=2, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
     
     if not df_samsung.empty:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        # 좌측 Y축: 보통주 & 우선주 주가 가격
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
-        
-        # 우측 보조 Y축: 괴리율 (%)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='purple', width=1.5, dash='dot')), secondary_y=True)
-        
-        # HTML 파일에 정의된 주요 괴리율 좁혀짐 구간 데이터 (vrect 활용 음영 추가)
-        episodes = [
-            {"start": "2017-04-01", "end": "2018-02-28", "type": "rally", "name": "동반상승 (우선주 급등)"},
-            {"start": "2018-05-01", "end": "2019-01-31", "type": "decline", "name": "동반하락 (보통주 급락)"},
-            {"start": "2019-03-01", "end": "2020-06-30", "type": "rally", "name": "동반상승 (우선주 급등)"},
-            {"start": "2020-09-01", "end": "2020-12-31", "type": "rally", "name": "동반상승 (우선주 급등)"},
-            {"start": "2021-01-01", "end": "2021-08-31", "type": "decline", "name": "동반하락 (보통주 급락)"},
-            {"start": "2023-11-01", "end": "2024-03-31", "type": "rally", "name": "동반상승 (우선주 급등)"},
-            {"start": "2024-07-01", "end": "2024-11-30", "type": "decline", "name": "동반하락 (보통주 급락)"},
-            {"start": "2026-03-01", "end": "2026-04-30", "type": "rally", "name": "동반상승 (우선주 급등)"},
-            {"start": "2026-05-01", "end": "2026-09-09", "type": "decline", "name": "동반하락 (보통주 급락)"},
-        ]
-
-        # Plotly 배경 음영(vrect) 적용
-        for ep in episodes:
-            fill_color = "rgba(34, 197, 94, 0.15)" if ep["type"] == "rally" else "rgba(249, 115, 22, 0.15)"
-            line_color = "rgba(21, 128, 61, 0.4)" if ep["type"] == "rally" else "rgba(194, 65, 12, 0.4)"
-            
-            fig.add_vrect(
-                x0=ep["start"], x1=ep["end"],
-                fillcolor=fill_color,
-                layer="below", line_width=1,
-                line_dash="dot",
-                line_color=line_color,
-                secondary_y=True
-            )
-
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
-        
-        fig.update_layout(
-            title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=550,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-        )
+        fig.update_layout(title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", margin=dict(l=20, r=20, t=40, b=20), height=500, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
         fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
         fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
-        
-        # 🎨 범례(Legend) UI 추가
-        st.markdown("""
-        <div style="display: flex; gap: 20px; margin-bottom: 15px; font-size: 13px;">
-            <div><span style="display:inline-block; width:14px; height:14px; background:rgba(34,197,94,0.3); border:1px solid #15803d; margin-right:5px; vertical-align:middle;"></span><b>동반상승</b> — 우선주가 더 가파르게 상승하여 괴리율 축소</div>
-            <div><span style="display:inline-block; width:14px; height:14px; background:rgba(249,115,22,0.3); border:1px solid #c2410c; margin-right:5px; vertical-align:middle;"></span><b>동반하락</b> — 보통주가 더 크게 하락하여 괴리율 축소</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # 📊 하단 상세 분석 표(DataFrame) 구성
-        st.subheader("📋 주요 괴리율 좁혀짐 구간 상세 내역")
-        table_data = [
-            {"구간": "2017.04 → 2018.02", "괴리율": "27.0% → 19.6%", "보통주": "+13.3%", "우선주": "+24.8%", "유형": "동반상승·우선주 급등"},
-            {"구간": "2018.05 → 2019.01", "괴리율": "24.3% → 18.9%", "보통주": "-16.0%", "우선주": "-10.0%", "유형": "동반하락·보통주 급락"},
-            {"구간": "2019.03 → 2020.06", "괴리율": "22.7% → 13.3%", "보통주": "+25.1%", "우선주": "+40.4%", "유형": "동반상승·우선주 급등"},
-            {"구간": "2020.09 → 2020.12", "괴리율": "16.3% → 8.1%",  "보통주": "+24.1%", "우선주": "+36.3%", "유형": "동반상승·우선주 급등"},
-            {"구간": "2021.01 → 2021.08", "괴리율": "13.6% → 8.3%",  "보통주": "-16.0%", "우선주": "-10.9%", "유형": "동반하락·보통주 급락"},
-            {"구간": "2023.11 → 2024.03", "괴리율": "21.2% → 15.0%", "보통주": "+2.7%",  "우선주": "+10.8%", "유형": "동반상승·우선주 급등"},
-            {"구간": "2024.07 → 2024.11", "괴리율": "22.3% → 15.1%", "보통주": "-30.3%", "우선주": "-23.8%", "유형": "동반하락·보통주 급락"},
-            {"구간": "2026.03 → 2026.04", "괴리율": "33.9% → 28.0%", "보통주": "+14.0%", "우선주": "+24.2%", "유형": "동반상승·우선주 급등"},
-            {"구간": "2026.05 → 2026.09*", "괴리율": "36.2% → 26.4%", "보통주": "-14.9%", "우선주": "-1.9%", "유형": "동반하락·보통주 급락"},
-        ]
-        df_table = pd.DataFrame(table_data)
-        st.dataframe(df_table, use_container_width=True, hide_index=True)
-        
-        st.markdown("""
-        <div style="font-size: 11.5px; color: #78716c; margin-top: 5px; line-height: 1.5;">
-        * 두 유형 모두 "괴리율 축소 = 우선주의 상대적 강세"라는 공통점이 있지만, 초록(동반상승)은 둘 다 오르는 국면에서 우선주가 더 빠르게 따라붙는 경우이고, 주황(동반하락)은 둘 다 빠지는 국면에서 보통주가 더 크게 무너지며 좁혀지는 경우입니다.
-        </div>
-        """, unsafe_allow_html=True)
     else:
-        st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")# ==========================================
-# [Page 7] 금융 소식 캘린더 (자동 생성 방식 적용)
+        st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
+
+# ==========================================
+# [Page 7] 금융 소식 캘린더 (TradingEconomics 스타일 고도화)
 # ==========================================
 with tab7:
-    st.subheader("📅 주요 경제지표 및 중앙은행 일정 캘린더 (자동 반영)")
+    st.subheader("📅 미국 핵심 매크로 캘린더 & 지표별 과거 추이 (TradingEconomics 스타일)")
     st.markdown("""
     <style>
     .event-card { padding: 12px; border-radius: 6px; border: 1px solid #e0e0e0; margin-bottom: 8px; background-color: #fafafa; }
@@ -510,43 +462,54 @@ with tab7:
     col_cal_left, col_cal_right = st.columns([1.5, 1])
     
     with col_cal_left:
-        st.markdown("### 🗓️ 전체 일정 목록")
-        categories = ["전체"] + list(df_cal['Category'].unique())
+        st.markdown("### 🗓️ 전체 경제 일정 및 발표 결과")
+        categories = ["전체", "통화정책", "물가", "고용", "경기실물"]
         selected_cat = st.selectbox("분류 필터:", options=categories, key="cal_filter")
         
         df_display = df_cal.copy()
         if selected_cat != "전체":
             df_display = df_display[df_display['Category'] == selected_cat]
             
-        df_show = df_display[['Date', 'Category', 'Title', 'Details', 'D-day']].rename(columns={'Date': '날짜', 'Category': '분류', 'Title': '일정명', 'Details': '출처/시간'})
+        df_show = df_display[['Date', 'Category', 'Title', 'Actual', 'Previous', 'Forecast', 'D-day']].rename(
+            columns={'Date': '날짜', 'Category': '분류', 'Title': '경제지표명', 'Actual': '실제', 'Previous': '이전', 'Forecast': '예측치'}
+        )
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
     with col_cal_right:
-        st.markdown("### 🔥 다가오는 핵심 일정 (Key Events)")
-        core_events = df_cal[(df_cal['IsCore'] == '핵심') & (df_cal['D-day'] >= -1)].sort_values('D-day').head(4)
-        
-        if not core_events.empty:
-            for _, row in core_events.iterrows():
-                d_val = row['D-day']
-                d_str = f"D-{d_val}" if d_val > 0 else ("D-Day" if d_val == 0 else f"D+{abs(d_val)}")
-                d_color = "red" if d_val <= 3 else "blue"
-                
-                card_html = f"""
-                <div class="event-card">
-                    <b>{row['Title']}</b><br>
-                    <span style="color:gray; font-size:12px;">{row['Details']} ({row['Date']})</span><br>
-                    <span style="color:{d_color}; font-size:11px; font-weight:bold;">{d_str}</span>
-                </div>
-                """
-                st.markdown(card_html, unsafe_allow_html=True)
+        st.markdown("### 📊 지표별 과거 발표 추이")
+        past_events = df_cal[df_cal['D-day'] <= 0]['Title'].tolist()
+        if past_events:
+            selected_indicator = st.selectbox("조회할 경제지표 선택:", options=past_events, key="indicator_history_select")
+            
+            history_df = get_indicator_history(selected_indicator)
+            st.markdown(f"**📌 [{selected_indicator}] 역사적 추이**")
+            st.dataframe(history_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            st.markdown("### 🔥 다가오는 핵심 일정 (Key Events)")
+            core_events = df_cal[(df_cal['IsCore'] == '핵심') & (df_cal['D-day'] >= 0)].sort_values('D-day').head(3)
+            if not core_events.empty:
+                for _, row in core_events.iterrows():
+                    d_val = row['D-day']
+                    d_str = "D-Day" if d_val == 0 else f"D-{d_val}"
+                    d_color = "red" if d_val <= 3 else "blue"
+                    card_html = f"""
+                    <div class="event-card">
+                        <b>[{row['Category']}] {row['Title']}</b><br>
+                        <span style="color:gray; font-size:12px;">{row['Details']} ({row['Date']})</span><br>
+                        <span style="color:{d_color}; font-size:11px; font-weight:bold;">{d_str}</span>
+                    </div>
+                    """
+                    st.markdown(card_html, unsafe_allow_html=True)
         else:
-            st.info("임박한 핵심 일정이 없습니다.")
+            st.info("조회할 과거 지표가 없습니다.")
+
 # ==========================================
-# [Page 7] 한국 수출입 데이터 (구글 시트 연동)
+# [Page 8] 한국 수출입 데이터 (구글 시트 연동)
 # ==========================================
-with tab7:
+with tab8:
     st.subheader("🚢 대한민국 수출입 데이터 시각화 (2000년 ~ 현재)")
-    st.info("💡 한국은행 ECOS 실시간 연동 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
+    st.info("💡 구글 시트에 연동된 한국은행 ECOS 실시간 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
     
     # 💡 구글 시트 웹 게시(CSV) 링크를 여기에 넣어주세요!
     csv_url = "여기에_본인의_구글시트_웹게시_CSV_링크를_넣으세요"
@@ -562,12 +525,10 @@ with tab7:
         df_export = pd.DataFrame()
 
     if not df_export.empty:
-        # Streamlit 화면에서 실시간으로 YoY 계산 추가 (시트 수정 불필요)
         df_export['Value'] = pd.to_numeric(df_export['Value'], errors='coerce')
         df_export['YoY_Growth (%)'] = df_export['Value'].pct_change(12) * 100
         df_export['YoY_Growth (%)'] = df_export['YoY_Growth (%)'].round(2)
         
-        # 보기 방식 선택 라디오 버튼
         view_mode = st.radio(
             "조회 지표를 선택하세요:", 
             ["전년 동월 대비 증가율 (YoY %)", "수출 명목금액"], 
@@ -581,7 +542,6 @@ with tab7:
             if view_mode == "전년 동월 대비 증가율 (YoY %)":
                 val_col = 'YoY_Growth (%)'
                 df_chart = df_export.dropna(subset=[val_col])
-                # 트레이딩이코노믹스 스타일: 양수는 파란색, 음수는 주황색
                 colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in df_chart[val_col]]
                 title_text = "<b>대한민국 월별 수출 증가율 (YoY %) - 2000년 이후</b>"
                 yaxis_text = "증가율 (%)"
