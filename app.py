@@ -169,7 +169,6 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 💡 [UPGRADED] 안정적인 requests 기반 구글 시트 CSV 연동 함수
 @st.cache_data(ttl=3600)
 def get_dram_csv_data():
     csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRyxRDpITzRJmbQ1XPnJHazHIq0IIr1DpeetgocahZipL64gDJYM_0H3JjFNv91C21t17TdCG9H-AHd/pub?gid=746668639&single=true&output=csv"
@@ -184,7 +183,7 @@ def get_dram_csv_data():
     except Exception as e:
         return pd.DataFrame()
 
-# 4. 탭 화면 구성 (Page 5 추가)
+# 4. 탭 화면 구성
 tab_home, tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)"])
 
 # ==========================================
@@ -280,7 +279,7 @@ with tab_home:
         st.markdown(final_custom_css, unsafe_allow_html=True)
 
 # ==========================================
-# [Page 1] 주가지수 화면
+# [Page 1] 주가지수 화면 (YTD 선택 시 제목에 색상 적용된 YTD 표시)
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
@@ -317,14 +316,21 @@ with tab1:
             latest_close = df_m['Close'].iloc[-1]
             latest_dd = df_m['DD'].iloc[-1]
             
-            fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%",
+            # 💡 YTD 선택 시 DD 옆에 색상별 YTD 추가 (+ 빨간색, - 파란색)
+            ytd_title_part = ""
+            if period_option_1 == "YTD":
+                ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
+                ytd_color = "red" if ytd_val >= 0 else "blue"
+                ytd_title_part = f" | YTD: <span style='color:{ytd_color};'>{ytd_val:+.2f}%</span>"
+
+            fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}",
                               margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
             fig.update_yaxes(title_text="지수 (pt)", type="log" if is_log_scale else "linear", secondary_y=False)
             fig.update_yaxes(title_text="DD (%)", range=[-65, 2], secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [Page 2] 환율 & 원자재 화면
+# [Page 2] 환율 & 원자재 화면 (YTD 선택 시 제목에 색상 적용된 YTD 표시)
 # ==========================================
 with tab2:
     st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
@@ -353,8 +359,15 @@ with tab2:
             latest_val = df_fx['Close'].iloc[-1]
             latest_dd = df_fx['DD'].iloc[-1]
             
+            # 💡 YTD 선택 시 DD 옆에 색상별 YTD 추가 (+ 빨간색, - 파란색)
+            ytd_title_part = ""
+            if period_option_2 == "YTD":
+                ytd_val = ((latest_val / df_fx['Close'].iloc[0]) - 1) * 100
+                ytd_color = "red" if ytd_val >= 0 else "blue"
+                ytd_title_part = f" | YTD: <span style='color:{ytd_color};'>{ytd_val:+.2f}%</span>"
+
             fig.update_layout(
-                title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%",
+                title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}",
                 margin=dict(l=20, r=20, t=40, b=20),
                 height=330,
                 showlegend=False
