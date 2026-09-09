@@ -512,7 +512,7 @@ with tab8:
     st.info("💡 구글 시트에 연동된 한국은행 ECOS 실시간 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
     
     # 💡 구글 시트 웹 게시(CSV) 링크를 여기에 넣어주세요!
-    csv_url = "여기에_본인의_구글시트_웹게시_CSV_링크를_넣으세요"
+    csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT0NA7he4fhkC6nqjWqV5U6ls9Upj96NT_zYOlXeaHtJMifAJ39-T5lnZ8IPD2_WTYhrIP7iUrkhK7T/pub?gid=0&single=true&output=csv"
     
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
