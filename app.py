@@ -541,3 +541,73 @@ with tab7:
                 st.markdown(card_html, unsafe_allow_html=True)
         else:
             st.info("임박한 핵심 일정이 없습니다.")
+# ==========================================
+# [Page 7] 한국 수출입 데이터 (구글 시트 연동)
+# ==========================================
+with tab7:
+    st.subheader("🚢 대한민국 수출입 데이터 시각화 (2000년 ~ 현재)")
+    st.info("💡 한국은행 ECOS 실시간 연동 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
+    
+    # 💡 구글 시트 웹 게시(CSV) 링크를 여기에 넣어주세요!
+    csv_url = "여기에_본인의_구글시트_웹게시_CSV_링크를_넣으세요"
+    
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(csv_url, headers=headers)
+        if response.status_code == 200:
+            df_export = pd.read_csv(io.StringIO(response.text))
+        else:
+            df_export = pd.DataFrame()
+    except:
+        df_export = pd.DataFrame()
+
+    if not df_export.empty:
+        # Streamlit 화면에서 실시간으로 YoY 계산 추가 (시트 수정 불필요)
+        df_export['Value'] = pd.to_numeric(df_export['Value'], errors='coerce')
+        df_export['YoY_Growth (%)'] = df_export['Value'].pct_change(12) * 100
+        df_export['YoY_Growth (%)'] = df_export['YoY_Growth (%)'].round(2)
+        
+        # 보기 방식 선택 라디오 버튼
+        view_mode = st.radio(
+            "조회 지표를 선택하세요:", 
+            ["전년 동월 대비 증가율 (YoY %)", "수출 명목금액"], 
+            horizontal=True,
+            key="export_view_mode"
+        )
+        
+        st.dataframe(df_export, use_container_width=True)
+        
+        if 'Date' in df_export.columns:
+            if view_mode == "전년 동월 대비 증가율 (YoY %)":
+                val_col = 'YoY_Growth (%)'
+                df_chart = df_export.dropna(subset=[val_col])
+                # 트레이딩이코노믹스 스타일: 양수는 파란색, 음수는 주황색
+                colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in df_chart[val_col]]
+                title_text = "<b>대한민국 월별 수출 증가율 (YoY %) - 2000년 이후</b>"
+                yaxis_text = "증가율 (%)"
+                x_data = df_chart['Date'].astype(str)
+                y_data = df_chart[val_col]
+            else:
+                val_col = 'Value'
+                df_chart = df_export
+                colors = '#1f77b4'
+                title_text = "<b>대한민국 월별 수출 명목금액 (천불) - 2000년 이후</b>"
+                yaxis_text = "금액 (천불)"
+                x_data = df_chart['Date'].astype(str)
+                y_data = df_chart[val_col]
+            
+            fig = go.Figure(data=[go.Bar(
+                x=x_data, 
+                y=y_data,
+                marker_color=colors
+            )])
+            fig.update_layout(
+                title=title_text,
+                xaxis_title="기간 (YYYYMM)",
+                yaxis_title=yaxis_text,
+                height=450,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("구글 시트 수출 데이터를 불러오지 못했습니다. '파일 -> 공유 -> 웹에 게시(CSV)' 링크를 확인해주세요.")
