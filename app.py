@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import requests
+import io
 
 # 1. 웹페이지 기본 설정
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
@@ -167,13 +169,18 @@ def get_us_bonds_data():
             data[name] = df.iloc[:, 0]
     return data
 
-# 💡 [NEW] 구글 시트 CSV 연동 함수 (D램 가격 데이터)
+# 💡 [UPGRADED] 안정적인 requests 기반 구글 시트 CSV 연동 함수
 @st.cache_data(ttl=3600)
 def get_dram_csv_data():
     csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRyxRDpITzRJmbQ1XPnJHazHIq0IIr1DpeetgocahZipL64gDJYM_0H3JjFNv91C21t17TdCG9H-AHd/pub?gid=746668639&single=true&output=csv"
     try:
-        df = pd.read_csv(csv_url)
-        return df
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(csv_url, headers=headers)
+        if response.status_code == 200:
+            df = pd.read_csv(io.StringIO(response.text))
+            return df
+        else:
+            return pd.DataFrame()
     except Exception as e:
         return pd.DataFrame()
 
@@ -397,7 +404,7 @@ with tab4:
         st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# [NEW] [Page 5] 반도체(D램) 가격 추이 (구글 시트 연동)
+# [Page 5] 반도체(D램) 가격 추이 (구글 시트 연동)
 # ==========================================
 with tab5:
     st.subheader("💾 D램 현물 및 고정거래 가격 추이 (구글 시트 연동)")
