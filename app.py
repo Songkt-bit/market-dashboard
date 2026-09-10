@@ -510,10 +510,9 @@ with tab7:
 with tab8:
     st.subheader("🚢 대한민국 수출입 데이터 시각화 (2000년 ~ 현재)")
     st.info("💡 구글 시트에 연동된 한국은행 ECOS 실시간 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
-    
-    # 💡 구글 시트 웹 게시(CSV) 링크를 여기에 넣어주세요!
+
     csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT0NA7he4fhkC6nqjWqV5U6ls9Upj96NT_zYOlXeaHtJMifAJ39-T5lnZ8IPD2_WTYhrIP7iUrkhK7T/pub?gid=0&single=true&output=csv"
-    
+
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(csv_url, headers=headers)
@@ -525,22 +524,22 @@ with tab8:
         df_export = pd.DataFrame()
 
     if not df_export.empty:
-        df_export['Value'] = pd.to_numeric(df_export['Value'], errors='coerce')
-        df_export['YoY_Growth (%)'] = df_export['Value'].pct_change(12) * 100
-        df_export['YoY_Growth (%)'] = df_export['YoY_Growth (%)'].round(2)
-        
+        # 시트에서 이미 계산되어 오는 값이므로 숫자 타입만 맞춰줌 (재계산 X)
+        df_export['수출액'] = pd.to_numeric(df_export['수출액'], errors='coerce')
+        df_export['YoY(%)'] = pd.to_numeric(df_export['YoY(%)'], errors='coerce')
+
         view_mode = st.radio(
-            "조회 지표를 선택하세요:", 
-            ["전년 동월 대비 증가율 (YoY %)", "수출 명목금액"], 
+            "조회 지표를 선택하세요:",
+            ["전년 동월 대비 증가율 (YoY %)", "수출 명목금액"],
             horizontal=True,
             key="export_view_mode"
         )
-        
+
         st.dataframe(df_export, use_container_width=True)
-        
+
         if 'Date' in df_export.columns:
             if view_mode == "전년 동월 대비 증가율 (YoY %)":
-                val_col = 'YoY_Growth (%)'
+                val_col = 'YoY(%)'
                 df_chart = df_export.dropna(subset=[val_col])
                 colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in df_chart[val_col]]
                 title_text = "<b>대한민국 월별 수출 증가율 (YoY %) - 2000년 이후</b>"
@@ -548,22 +547,22 @@ with tab8:
                 x_data = df_chart['Date'].astype(str)
                 y_data = df_chart[val_col]
             else:
-                val_col = 'Value'
+                val_col = '수출액'
                 df_chart = df_export
                 colors = '#1f77b4'
                 title_text = "<b>대한민국 월별 수출 명목금액 (천불) - 2000년 이후</b>"
                 yaxis_text = "금액 (천불)"
                 x_data = df_chart['Date'].astype(str)
                 y_data = df_chart[val_col]
-            
+
             fig = go.Figure(data=[go.Bar(
-                x=x_data, 
+                x=x_data,
                 y=y_data,
                 marker_color=colors
             )])
             fig.update_layout(
                 title=title_text,
-                xaxis_title="기간 (YYYYMM)",
+                xaxis_title="기간 (YY.MM)",
                 yaxis_title=yaxis_text,
                 height=450,
                 margin=dict(l=20, r=20, t=40, b=20)
