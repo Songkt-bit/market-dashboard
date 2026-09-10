@@ -426,7 +426,7 @@ with tab4:
 # ==========================================
 with tab5:
     st.subheader("💾 D램 현물 및 고정거래 가격 추이 (구글 시트 연동)")
-    st.info("💡 구글 시트에 실실시간 연동된 D램 가격 및 변동성 데이터를 불러와 시각화합니다.")
+    st.info("💡 구글 시트에 실시간 연동된 D램 가격 및 변동성 데이터를 불러와 시각화합니다.")
     df_dram = get_dram_csv_data()
     if not df_dram.empty:
         st.dataframe(df_dram, use_container_width=True)
@@ -434,11 +434,11 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 괴리율 & 주가 음영 오버레이
+# [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (보조 축 활용)
 # ==========================================
 with tab6:
-    st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 구간 분석")
-    st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다[cite: 1].")
+    st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 통합 차트")
+    st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다[cite: 1].")
     
     period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=3, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
@@ -458,47 +458,33 @@ with tab6:
             {"start": "2026-05-01", "end": "2026-09-30", "color": "rgba(249,115,22,0.25)"}    # decline
         ]
 
-        # 1. 주가 차트 (보통주 vs 우선주)에 음영 오버레이 적용
-        fig_price = go.Figure()
+        # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
         for ep in episodes:
-            fig_price.add_vrect(
+            fig.add_vrect(
                 x0=ep["start"], x1=ep["end"],
                 fillcolor=ep["color"], opacity=1.0,
                 layer="below", line_width=0
             )
-        fig_price.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)))
-        fig_price.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)))
+
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='#4f46e5', width=1.5, dash='dot')), secondary_y=True)
         
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
-
-        fig_price.update_layout(
-            title=f"<b>삼성전자 주가 추이 (보통주 vs 우선주) 및 좁혀짐 구간 음영</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400,
+        
+        fig.update_layout(
+            title=f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", 
+            margin=dict(l=20, r=20, t=40, b=20), 
+            height=500, 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
         )
-        fig_price.update_yaxes(title_text="주가 (원)")
-        st.plotly_chart(fig_price, use_container_width=True)
-
-        # 2. 괴리율 차트에 음영 오버레이 적용
-        fig_disp = go.Figure()
-        for ep in episodes:
-            fig_disp.add_vrect(
-                x0=ep["start"], x1=ep["end"],
-                fillcolor=ep["color"], opacity=1.0,
-                layer="below", line_width=0
-            )
-        fig_disp.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='#4f46e5', width=1.5, dash='dot')))
-        fig_disp.update_layout(
-            title=f"<b>삼성전자 괴리율 (%) 추이 및 좁혀짐 구간</b> | 현재 괴리율: {latest_disp:+.2f}%",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=350,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-        )
-        fig_disp.update_yaxes(title_text="괴리율 (%)")
-        st.plotly_chart(fig_disp, use_container_width=True)
+        fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
+        fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
 
         # 범례 설명 표시
         st.markdown("""
@@ -508,7 +494,7 @@ with tab6:
         </div>
         """, unsafe_allow_html=True)
 
-        # 페이지 맨 아래 괴리율 좁혀지는 구간대 분석 표 추가[cite: 1]
+        # 괴리율 좁혀지는 구간대 분석 표 추가[cite: 1]
         st.markdown("### 📋 괴리율 좁혀짐 구간 상세 표[cite: 1]")
         st.markdown("""
         <style>
@@ -543,7 +529,7 @@ with tab6:
         </div>
         """, unsafe_allow_html=True)
 
-        # 3. 괴리율 기간별 평균 (1, 3, 5, 10, 20년) 자동 계산 및 표시
+        # 괴리율 기간별 평균 (1, 3, 5, 10, 20년) - 단어 순서 재조정 적용
         st.markdown("### 📈 괴리율 기간별 평균 추이")
         latest_idx = df_samsung.index[-1]
         
@@ -554,11 +540,11 @@ with tab6:
         avg_20y = df_samsung.loc[df_samsung.index >= latest_idx - pd.DateOffset(years=20), 'Disparity'].mean()
 
         col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-        col_m1.metric("1년 평균 괴리율", f"{avg_1y:.2f}%" if pd.notna(avg_1y) else "N/A")
-        col_m2.metric("3년 평균 괴리율", f"{avg_3y:.2f}%" if pd.notna(avg_3y) else "N/A")
-        col_m3.metric("5년 평균 괴리율", f"{avg_5y:.2f}%" if pd.notna(avg_5y) else "N/A")
-        col_m4.metric("10년 평균 괴리율", f"{avg_10y:.2f}%" if pd.notna(avg_10y) else "N/A")
-        col_m5.metric("20년 평균 괴리율", f"{avg_20y:.2f}%" if pd.notna(avg_20y) else "N/A")
+        col_m1.metric("괴리율 1년 평균", f"{avg_1y:.2f}%" if pd.notna(avg_1y) else "N/A")
+        col_m2.metric("괴리율 3년 평균", f"{avg_3y:.2f}%" if pd.notna(avg_3y) else "N/A")
+        col_m3.metric("괴리율 5년 평균", f"{avg_5y:.2f}%" if pd.notna(avg_5y) else "N/A")
+        col_m4.metric("괴리율 10년 평균", f"{avg_10y:.2f}%" if pd.notna(avg_10y) else "N/A")
+        col_m5.metric("괴리율 20년 평균", f"{avg_20y:.2f}%" if pd.notna(avg_20y) else "N/A")
 
     else:
         st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
