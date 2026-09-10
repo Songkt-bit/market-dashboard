@@ -252,7 +252,7 @@ def get_indicator_history(title):
             {"발표일": "2026-08-15", "참고": "Prior", "실제": "이전 발표", "이전": "직전 수치", "예측치": "시장 컨센서스"}
         ])
 
-# 4. 탭 화면 구성 (Page 7: 금융 캘린더, Page 8: 한국 수출입 데이터)
+# 4. 탭 화면 구성
 tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", 
@@ -434,37 +434,50 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 괴리율 (음영표시 반영)
+# [Page 6] 삼성전자 괴리율 (괴리율 좁혀짐 구간 음영 및 테이블 반영)
 # ==========================================
 with tab6:
-    st.subheader("📉 삼성전자 본주(보통주) vs 우선주 가격 및 괴리율 추이")
-    period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=2, horizontal=True, key="samsung_p6")
+    st.subheader("📉 삼성전자 보통주 vs 우선주 — 괴리율 좁혀짐 구간 분석[cite: 1]")
+    st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다[cite: 1].")
+    
+    period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=3, horizontal=True, key="samsung_p6") # 기본 10년 이상이어야 과거 구간이 잘 보입니다.
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
 
     if not df_samsung.empty:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
-        # 💡 괴리율 주요 고괴리율 구간 음영 표시 추가 (우선주 저평가 구간 강조)
-        fig.add_hrect(
-            y0=20, y1=35, 
-            fillcolor="purple", opacity=0.1, 
-            layer="below", line_width=0, 
-            secondary_y=True,
-            annotation_text="고괴리율 구간 (우선주 저평가)", 
-            annotation_position="top left"
-        )
-        
+        # 괴리율 좁혀짐 주요 구간 정의 (HTML 소스 기반)[cite: 1]
+        episodes = [
+            {"start": "2017-04-01", "end": "2018-02-28", "color": "rgba(34,197,94,0.25)"},   # rally (동반상승)
+            {"start": "2018-05-01", "end": "2019-01-31", "color": "rgba(249,115,22,0.25)"},  # decline (동반하락)
+            {"start": "2019-03-01", "end": "2020-06-30", "color": "rgba(34,197,94,0.25)"},   # rally
+            {"start": "2020-09-01", "end": "2020-12-31", "color": "rgba(34,197,94,0.25)"},   # rally
+            {"start": "2021-01-01", "end": "2021-08-31", "color": "rgba(249,115,22,0.25)"},  # decline
+            {"start": "2023-11-01", "end": "2024-03-31", "color": "rgba(34,197,94,0.25)"},   # rally
+            {"start": "2024-07-01", "end": "2024-11-30", "color": "rgba(249,115,22,0.25)"},  # decline
+            {"start": "2026-03-01", "end": "2026-04-30", "color": "rgba(34,197,94,0.25)"},   # rally
+            {"start": "2026-05-01", "end": "2026-09-30", "color": "rgba(249,115,22,0.25)"}    # decline
+        ]
+
+        # 차트 배경에 좁혀짐 구간 음영(vrect) 적용
+        for ep in episodes:
+            fig.add_vrect(
+                x0=ep["start"], x1=ep["end"],
+                fillcolor=ep["color"], opacity=1.0,
+                layer="below", line_width=0
+            )
+
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='purple', width=1.5, dash='dot')), secondary_y=True)
+        fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='#4f46e5', width=1.5, dash='dot')), secondary_y=True)
         
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
         
         fig.update_layout(
-            title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", 
+            title=f"<b>삼성전자 보통주 vs 우선주 주가 및 괴리율</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", 
             margin=dict(l=20, r=20, t=40, b=20), 
             height=500, 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
@@ -472,6 +485,49 @@ with tab6:
         fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
         fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
+
+        # 범례 설명 표시
+        st.markdown("""
+        <div style="display: flex; gap: 20px; font-size: 13px; margin-bottom: 20px; flex-wrap: wrap;">
+          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(34,197,94,0.35); border:1px solid rgba(21,128,61,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반상승</b> — 우선주가 더 가파르게 상승하여 괴리율 축소[cite: 1]</div>
+          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(249,115,22,0.35); border:1px solid rgba(194,65,12,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반하락</b> — 보통주가 더 가파르게 하락하여 괴리율 축소[cite: 1]</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 페이지 맨 아래 괴리율 좁혀지는 구간대 분석 표 추가[cite: 1]
+        st.markdown("### 📋 괴리율 좁혀짐 구간 상세 표[cite: 1]")
+        st.markdown("""
+        <style>
+          .gap-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #e7e5e4; }
+          .gap-table th, .gap-table td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #f0efed; }
+          .gap-table th:first-child, .gap-table td:first-child { text-align: left; }
+          .gap-table th { color: #78716c; font-weight: 600; font-size: 12px; background: #fafaf9; }
+          .gap-table .up { color: #16a34a; font-weight: 600; }
+          .gap-table .down { color: #ea580c; font-weight: 600; }
+          .gap-table .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; display: inline-block; }
+          .gap-table .tag-rally { background: #dcfce7; color: #15803d; }
+          .gap-table .tag-decline { background: #ffedd5; color: #c2410c; }
+        </style>
+        <table class="gap-table">
+          <thead>
+            <tr><th>구간</th><th>괴리율</th><th>보통주</th><th>우선주</th><th>유형</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>2017.04 → 2018.02</td><td>27.0%→19.6%</td><td class="up">+13.3%</td><td class="up">+24.8%</td><td><span class="tag tag-rally">동반상승·우선주 급등</span></td></tr>
+            <tr><td>2018.05 → 2019.01</td><td>24.3%→18.9%</td><td class="down">-16.0%</td><td class="down">-10.0%</td><td><span class="tag tag-decline">동반하락·보통주 급락</span></td></tr>
+            <tr><td>2019.03 → 2020.06</td><td>22.7%→13.3%</td><td class="up">+25.1%</td><td class="up">+40.4%</td><td><span class="tag tag-rally">동반상승·우선주 급등</span></td></tr>
+            <tr><td>2020.09 → 2020.12</td><td>16.3%→8.1%</td><td class="up">+24.1%</td><td class="up">+36.3%</td><td><span class="tag tag-rally">동반상승·우선주 급등</span></td></tr>
+            <tr><td>2021.01 → 2021.08</td><td>13.6%→8.3%</td><td class="down">-16.0%</td><td class="down">-10.9%</td><td><span class="tag tag-decline">동반하락·보통주 급락</span></td></tr>
+            <tr><td>2023.11 → 2024.03</td><td>21.2%→15.0%</td><td class="up">+2.7%</td><td class="up">+10.8%</td><td><span class="tag tag-rally">동반상승·우선주 급등</span></td></tr>
+            <tr><td>2024.07 → 2024.11</td><td>22.3%→15.1%</td><td class="down">-30.3%</td><td class="down">-23.8%</td><td><span class="tag tag-decline">동반하락·보통주 급락</span></td></tr>
+            <tr><td>2026.03 → 2026.04</td><td>33.9%→28.0%</td><td class="up">+14.0%</td><td class="up">+24.2%</td><td><span class="tag tag-rally">동반상승·우선주 급등</span></td></tr>
+            <tr><td>2026.05 → 2026.09*</td><td>36.2%→26.4%</td><td class="down">-14.9%</td><td class="down">-1.9%</td><td><span class="tag tag-decline">동반하락·보통주 급락</span></td></tr>
+          </tbody>
+        </table>
+        <div style="font-size: 12px; color: #78716c; margin-top: 10px; line-height: 1.6;">
+          * 두 유형 모두 "괴리율 축소 = 우선주의 상대적 강세" 공통점이 있지만, 초록(동반상승)은 둘 다 오르는 국면에서 우선주가 더 빠르게 따라붙은 경우이고, 주황(동반하락)은 둘 다 빠지는 국면에서 보통주가 더 크게 무너진 경우입니다[cite: 1].
+        </div>
+        """, unsafe_allow_html=True)
     else:
         st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
 
