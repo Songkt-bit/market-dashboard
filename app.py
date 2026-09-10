@@ -254,8 +254,8 @@ def get_indicator_history(title):
 
 # 4. 탭 화면 구성 (Page 7: 금융 캘린더, Page 8: 한국 수출입 데이터)
 tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
-    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
+    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
+    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", 
     "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터"
 ])
 
@@ -263,8 +263,8 @@ tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    col_left, col_right = st.columns([1, 1.2])
-
+    col_left, col_right = st.columns([1, 1.2]) 
+    
     with col_left:
         st.subheader("최근 3년 & YTD 글로벌 시장 요약")
         df_summary, today_col = get_summary_table_data()
@@ -276,7 +276,7 @@ with tab_home:
             today_col: "{:,.2f}", "YTD": "{:+.2f}%"
         }).map(highlight_ytd, subset=['YTD'])
         st.dataframe(formatted_df, use_container_width=True, hide_index=True)
-
+        
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
         full_df = get_kospi_heatmap_data()
@@ -337,11 +337,11 @@ with tab1:
         period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
     with col_s1:
         scale_option_1 = st.radio("차트 축 스케일 선택:", ["선형 축 (Linear)", "로그 축 (Log)"], index=0, horizontal=True, key="m_s1")
-
+    
     start_date_1 = get_start_date(period_option_1)
     market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
     is_log_scale = "로그" in scale_option_1
-
+    
     cols1 = st.columns(2)
     for idx, (name, df_m) in enumerate(market_data.items()):
         with cols1[idx % 2]:
@@ -368,7 +368,7 @@ with tab2:
     period_option_2 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="fx_p2")
     start_date_2 = get_start_date(period_option_2)
     fx_data_dict = get_fx_long_data(FX_TICKERS, start_date_2.strftime("%Y-%m-%d"))
-
+    
     cols2 = st.columns(2)
     for idx, (name, df_fx) in enumerate(fx_data_dict.items()):
         with cols2[idx % 2]:
@@ -397,7 +397,7 @@ with tab3:
     period_option_3 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="macro_p3")
     start_date_3 = get_start_date(period_option_3)
     df_macro = get_macro_correlation_data(start_date_3.strftime("%Y-%m-%d"))
-
+    
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['US10Y'], name="미국 국채 10년(좌)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['KOSPI'], name="코스피(우)", line=dict(color='black', width=2)), secondary_y=True)
@@ -434,7 +434,7 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 괴리율
+# [Page 6] 삼성전자 괴리율 (음영표시 반영)
 # ==========================================
 with tab6:
     st.subheader("📉 삼성전자 본주(보통주) vs 우선주 가격 및 괴리율 추이")
@@ -444,13 +444,31 @@ with tab6:
 
     if not df_samsung.empty:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # 💡 괴리율 주요 고괴리율 구간 음영 표시 추가 (우선주 저평가 구간 강조)
+        fig.add_hrect(
+            y0=20, y1=35, 
+            fillcolor="purple", opacity=0.1, 
+            layer="below", line_width=0, 
+            secondary_y=True,
+            annotation_text="고괴리율 구간 (우선주 저평가)", 
+            annotation_position="top left"
+        )
+        
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='purple', width=1.5, dash='dot')), secondary_y=True)
+        
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
-        fig.update_layout(title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", margin=dict(l=20, r=20, t=40, b=20), height=500, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
+        
+        fig.update_layout(
+            title=f"<b>삼성전자 보통주 vs 우선주</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", 
+            margin=dict(l=20, r=20, t=40, b=20), 
+            height=500, 
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
         fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
         fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
@@ -536,7 +554,6 @@ with tab8:
         df_export = pd.DataFrame()
 
     def parse_yy_mm(d):
-        # '00.01.' -> '2000-01'
         yy, mm = str(d).strip('.').split('.')
         return f"{2000 + int(yy)}-{int(mm):02d}"
 
@@ -551,7 +568,6 @@ with tab8:
             key="export_view_mode"
         )
 
-        # --- 표: 여백 축소 + 천단위 콤마 + 단위 표기 ---
         df_table = df_export.copy()
         df_table['수출액'] = df_table['수출액'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
         df_table['YoY(%)'] = df_table['YoY(%)'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
