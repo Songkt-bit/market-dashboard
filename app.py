@@ -20,7 +20,7 @@ INDICES = {
 
 FX_TICKERS = {
     "미국 달러 (USD/KRW)": "KRW=X", "일본 엔 100 (JPY/KRW)": "JPYKRW=X",
-    "유럽연합 유로 (EUR/KRW)": "EURKRW=X", "중국 위안 (CNY/KRW)": "SYNTHETIC_CNYKRW", 
+    "유럽연합 유로 (EUR/KRW)": "EURKRW=X", "중국 위안 (CNY/KRW)": "SYNTHETIC_CNYKRW",
     "달러/일본 엔 (USD/JPY)": "JPY=X", "유로/달러 (EUR/USD)": "EURUSD=X",
     "영국 파운드/달러 (GBP/USD)": "GBPUSD=X", "달러 인덱스 (DXY)": "DX-Y.NYB",
     "WTI 원유 ($/배럴)": "CL=F"
@@ -60,13 +60,13 @@ def get_summary_table_data():
         if df.empty: continue
         close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
         close = close.iloc[:, 0]
-        
+
         yearly = close.groupby(close.index.year).last()
         val_23 = yearly.get(2023, None)
         val_24 = yearly.get(2024, None)
         val_25 = yearly.get(2025, None)
         val_today = close.iloc[-1]
-        
+
         ytd = ((val_today / val_25) - 1) * 100 if pd.notna(val_25) and val_25 != 0 else 0
         results.append({
             "최근": name, "2023 종가": val_23, "2024 종가": val_24,
@@ -78,38 +78,38 @@ def get_summary_table_data():
 def get_kospi_heatmap_data():
     df = yf.download("^KS11", start="1996-12-01", progress=False)
     if df.empty: return pd.DataFrame()
-    
+
     close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
     close = close.iloc[:, 0]
-    
+
     monthly_close = close.resample('ME').last()
     monthly_ret = monthly_close.pct_change() * 100
-    
+
     yearly_close = close.resample('YE').last()
     yearly_ret = yearly_close.pct_change() * 100
     yearly_ret.index = yearly_ret.index.year
-    
+
     df_ret = pd.DataFrame({'Return': monthly_ret})
     df_ret['Year'] = df_ret.index.year
     df_ret['Month'] = df_ret.index.month
-    
+
     pivot = df_ret.pivot(index='Year', columns='Month', values='Return')
     cols = list(range(1, 13))
     pivot = pivot.reindex(columns=cols)
     pivot['연간수익'] = yearly_ret
     pivot = pivot[pivot.index >= 1997]
-    
+
     avg_all = pivot.mean()
     avg_2000 = pivot[pivot.index >= 2000].mean()
     avg_2010 = pivot[pivot.index >= 2010].mean()
     avg_2020 = pivot[pivot.index >= 2020].mean()
-    
+
     win_rate = ((pivot > 0).sum() / pivot.notna().sum()) * 100
-    
+
     summary = pd.DataFrame([
         avg_all, avg_2000, avg_2010, avg_2020, win_rate
     ], index=['average', '2000년이후', '2010년이후', '2020년이후', '상승확률'])
-    
+
     full_df = pd.concat([pivot, summary])
     full_df.columns = [f"{c}월" for c in range(1, 13)] + ['연간수익']
     return full_df
@@ -156,6 +156,18 @@ def get_macro_correlation_data(start_date_str):
     close_kospi = df_kospi['Close'].iloc[:, 0] if isinstance(df_kospi.columns, pd.MultiIndex) else df_kospi['Close']
     close_tnx = df_tnx['Close'].iloc[:, 0] if isinstance(df_tnx.columns, pd.MultiIndex) else df_tnx['Close']
     return pd.DataFrame({'KOSPI': close_kospi, 'US10Y': close_tnx}).dropna()
+
+@st.cache_data(ttl=3600)
+def get_kospi_monthly_data():
+    df = yf.download("^KS11", start="2000-01-01", progress=False)
+    if df.empty:
+        return pd.DataFrame()
+    close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
+    close = close.iloc[:, 0]
+    monthly = close.resample('ME').last()
+    result = pd.DataFrame({'KOSPI': monthly})
+    result['YearMonth'] = result.index.strftime('%Y-%m')
+    return result.reset_index(drop=True)
 
 @st.cache_data(ttl=3600)
 def get_us_bonds_data():
@@ -242,8 +254,8 @@ def get_indicator_history(title):
 
 # 4. 탭 화면 구성 (Page 7: 금융 캘린더, Page 8: 한국 수출입 데이터)
 tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
-    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", 
+    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
+    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터"
 ])
 
@@ -251,8 +263,8 @@ tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    col_left, col_right = st.columns([1, 1.2]) 
-    
+    col_left, col_right = st.columns([1, 1.2])
+
     with col_left:
         st.subheader("최근 3년 & YTD 글로벌 시장 요약")
         df_summary, today_col = get_summary_table_data()
@@ -264,7 +276,7 @@ with tab_home:
             today_col: "{:,.2f}", "YTD": "{:+.2f}%"
         }).map(highlight_ytd, subset=['YTD'])
         st.dataframe(formatted_df, use_container_width=True, hide_index=True)
-        
+
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
         full_df = get_kospi_heatmap_data()
@@ -325,11 +337,11 @@ with tab1:
         period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
     with col_s1:
         scale_option_1 = st.radio("차트 축 스케일 선택:", ["선형 축 (Linear)", "로그 축 (Log)"], index=0, horizontal=True, key="m_s1")
-    
+
     start_date_1 = get_start_date(period_option_1)
     market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
     is_log_scale = "로그" in scale_option_1
-    
+
     cols1 = st.columns(2)
     for idx, (name, df_m) in enumerate(market_data.items()):
         with cols1[idx % 2]:
@@ -356,7 +368,7 @@ with tab2:
     period_option_2 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="fx_p2")
     start_date_2 = get_start_date(period_option_2)
     fx_data_dict = get_fx_long_data(FX_TICKERS, start_date_2.strftime("%Y-%m-%d"))
-    
+
     cols2 = st.columns(2)
     for idx, (name, df_fx) in enumerate(fx_data_dict.items()):
         with cols2[idx % 2]:
@@ -385,7 +397,7 @@ with tab3:
     period_option_3 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="macro_p3")
     start_date_3 = get_start_date(period_option_3)
     df_macro = get_macro_correlation_data(start_date_3.strftime("%Y-%m-%d"))
-    
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['US10Y'], name="미국 국채 10년(좌)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['KOSPI'], name="코스피(우)", line=dict(color='black', width=2)), secondary_y=True)
@@ -429,7 +441,7 @@ with tab6:
     period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=2, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
-    
+
     if not df_samsung.empty:
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
@@ -458,18 +470,18 @@ with tab7:
     """, unsafe_allow_html=True)
 
     df_cal = get_auto_macro_calendar()
-    
+
     col_cal_left, col_cal_right = st.columns([1.5, 1])
-    
+
     with col_cal_left:
         st.markdown("### 🗓️ 전체 경제 일정 및 발표 결과")
         categories = ["전체", "통화정책", "물가", "고용", "경기실물"]
         selected_cat = st.selectbox("분류 필터:", options=categories, key="cal_filter")
-        
+
         df_display = df_cal.copy()
         if selected_cat != "전체":
             df_display = df_display[df_display['Category'] == selected_cat]
-            
+
         df_show = df_display[['Date', 'Category', 'Title', 'Actual', 'Previous', 'Forecast', 'D-day']].rename(
             columns={'Date': '날짜', 'Category': '분류', 'Title': '경제지표명', 'Actual': '실제', 'Previous': '이전', 'Forecast': '예측치'}
         )
@@ -480,11 +492,11 @@ with tab7:
         past_events = df_cal[df_cal['D-day'] <= 0]['Title'].tolist()
         if past_events:
             selected_indicator = st.selectbox("조회할 경제지표 선택:", options=past_events, key="indicator_history_select")
-            
+
             history_df = get_indicator_history(selected_indicator)
             st.markdown(f"**📌 [{selected_indicator}] 역사적 추이**")
             st.dataframe(history_df, use_container_width=True, hide_index=True)
-            
+
             st.markdown("---")
             st.markdown("### 🔥 다가오는 핵심 일정 (Key Events)")
             core_events = df_cal[(df_cal['IsCore'] == '핵심') & (df_cal['D-day'] >= 0)].sort_values('D-day').head(3)
@@ -523,8 +535,12 @@ with tab8:
     except:
         df_export = pd.DataFrame()
 
+    def parse_yy_mm(d):
+        # '00.01.' -> '2000-01'
+        yy, mm = str(d).strip('.').split('.')
+        return f"{2000 + int(yy)}-{int(mm):02d}"
+
     if not df_export.empty:
-        # 시트에서 이미 계산되어 오는 값이므로 숫자 타입만 맞춰줌 (재계산 X)
         df_export['수출액'] = pd.to_numeric(df_export['수출액'], errors='coerce')
         df_export['YoY(%)'] = pd.to_numeric(df_export['YoY(%)'], errors='coerce')
 
@@ -535,38 +551,73 @@ with tab8:
             key="export_view_mode"
         )
 
-        st.dataframe(df_export, use_container_width=True)
+        # --- 표: 여백 축소 + 천단위 콤마 + 단위 표기 ---
+        df_table = df_export.copy()
+        df_table['수출액'] = df_table['수출액'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
+        df_table['YoY(%)'] = df_table['YoY(%)'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+
+        st.dataframe(
+            df_table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Date": st.column_config.TextColumn("Date", width="small"),
+                "수출액": st.column_config.TextColumn("수출액 (천불)", width="small"),
+                "YoY(%)": st.column_config.TextColumn("YoY (%)", width="small"),
+            }
+        )
 
         if 'Date' in df_export.columns:
             if view_mode == "전년 동월 대비 증가율 (YoY %)":
-                val_col = 'YoY(%)'
-                df_chart = df_export.dropna(subset=[val_col])
-                colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in df_chart[val_col]]
-                title_text = "<b>대한민국 월별 수출 증가율 (YoY %) - 2000년 이후</b>"
-                yaxis_text = "증가율 (%)"
-                x_data = df_chart['Date'].astype(str)
-                y_data = df_chart[val_col]
-            else:
-                val_col = '수출액'
-                df_chart = df_export
-                colors = '#1f77b4'
-                title_text = "<b>대한민국 월별 수출 명목금액 (천불) - 2000년 이후</b>"
-                yaxis_text = "금액 (천불)"
-                x_data = df_chart['Date'].astype(str)
-                y_data = df_chart[val_col]
+                df_chart = df_export.dropna(subset=['YoY(%)']).copy()
+                df_chart['YearMonth'] = df_chart['Date'].apply(parse_yy_mm)
 
-            fig = go.Figure(data=[go.Bar(
-                x=x_data,
-                y=y_data,
-                marker_color=colors
-            )])
-            fig.update_layout(
-                title=title_text,
-                xaxis_title="기간 (YY.MM)",
-                yaxis_title=yaxis_text,
-                height=450,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                kospi_df = get_kospi_monthly_data()
+                merged = pd.merge(df_chart, kospi_df, on='YearMonth', how='inner')
+
+                corr_value = merged['YoY(%)'].corr(merged['KOSPI']) if len(merged) > 1 else None
+                corr_text = f" | 상관계수(2000~현재): {corr_value:.3f}" if corr_value is not None else ""
+
+                colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in merged['YoY(%)']]
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+                fig.add_trace(go.Bar(
+                    x=merged['Date'], y=merged['YoY(%)'], name='수출 YoY (%)',
+                    marker_color=colors
+                ), secondary_y=False)
+                fig.add_trace(go.Scatter(
+                    x=merged['Date'], y=merged['KOSPI'], name='코스피 지수',
+                    line=dict(color='black', width=2)
+                ), secondary_y=True)
+
+                fig.update_layout(
+                    title=f"<b>대한민국 월별 수출 증가율(YoY %) vs 코스피 지수</b>{corr_text}",
+                    xaxis_title="기간 (YY.MM)",
+                    height=450,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    bargap=0.1,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                )
+                fig.update_yaxes(title_text="수출 증가율 (%)", secondary_y=False)
+                fig.update_yaxes(title_text="코스피 (pt)", tickformat=",", secondary_y=True)
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                df_chart = df_export
+                fig = go.Figure(data=[go.Bar(
+                    x=df_chart['Date'],
+                    y=df_chart['수출액'],
+                    marker_color='#1f77b4',
+                    hovertemplate="%{x}<br>수출액: %{y:,.0f} 천불<extra></extra>"
+                )])
+                fig.update_layout(
+                    title="<b>대한민국 월별 수출 명목금액 (천불) - 2000년 이후</b>",
+                    xaxis_title="기간 (YY.MM)",
+                    yaxis_title="금액 (천불)",
+                    height=450,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    bargap=0.1,
+                )
+                fig.update_yaxes(tickformat=",")
+                st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("구글 시트 수출 데이터를 불러오지 못했습니다. '파일 -> 공유 -> 웹에 게시(CSV)' 링크를 확인해주세요.")
