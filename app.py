@@ -13,7 +13,7 @@ st.title("📊 Daily Market & Macro Dashboard")
 
 # 2. 데이터 대상 정의
 INDICES = {
-    "코스피": "^KS11", "코ส닥": "^KQ11", "S&P 500": "^GSPC",
+    "코스피": "^KS11", "코스닥": "^KQ11", "S&P 500": "^GSPC",
     "나스닥 종합": "^IXIC", "다우존스 산업": "^DJI",
     "러셀 2000": "^RUT", "필라델피아 반도체": "^SOX"
 }
@@ -434,18 +434,18 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (음영 오버레이 수정)
+# [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (음영 오버레이 완벽 복원)
 # ==========================================
 with tab6:
     st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 통합 차트")
-    st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다[cite: 1].")
+    st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다.")
     
     period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=3, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
 
     if not df_samsung.empty:
-        # 공통 음영 구간 정의 (HTML 소스 기반)[cite: 1]
+        # 공통 음영 구간 정의 (HTML 소스 기반)
         episodes = [
             {"start": "2017-04-01", "end": "2018-02-28", "color": "rgba(34,197,94,0.25)"},   # rally (동반상승)
             {"start": "2018-05-01", "end": "2019-01-31", "color": "rgba(249,115,22,0.25)"},  # decline (동반하락)
@@ -458,7 +458,7 @@ with tab6:
             {"start": "2026-05-01", "end": "2026-09-30", "color": "rgba(249,115,22,0.25)"}    # decline
         ]
 
-        # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이 (yref="paper"로 음영 복원)
+        # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이 (xref="x", yref="paper" 적용으로 음영 정상 출력)
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
         for ep in episodes:
@@ -466,7 +466,7 @@ with tab6:
                 x0=ep["start"], x1=ep["end"],
                 fillcolor=ep["color"], opacity=1.0,
                 layer="below", line_width=0,
-                yref="paper", y0=0, y1=1
+                xref="x", yref="paper", y0=0, y1=1
             )
 
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
@@ -483,6 +483,7 @@ with tab6:
             height=500, 
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
         )
+        fig.update_xaxes(matches='x')
         fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
         fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
@@ -490,13 +491,13 @@ with tab6:
         # 범례 설명 표시
         st.markdown("""
         <div style="display: flex; gap: 20px; font-size: 13px; margin-bottom: 20px; flex-wrap: wrap;">
-          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(34,197,94,0.35); border:1px solid rgba(21,128,61,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반상승</b> — 우선주가 더 가파르게 상승하여 괴리율 축소[cite: 1]</div>
-          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(249,115,22,0.35); border:1px solid rgba(194,65,12,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반하락</b> — 보통주가 더 가파르게 하락하여 괴리율 축소[cite: 1]</div>
+          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(34,197,94,0.35); border:1px solid rgba(21,128,61,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반상승</b> — 우선주가 더 가파르게 상승하여 괴리율 축소</div>
+          <div><span style="display:inline-block; width:14px; height:14px; background:rgba(249,115,22,0.35); border:1px solid rgba(194,65,12,0.5); border-radius:3px; vertical-align:middle; margin-right:6px;"></span><b>동반하락</b> — 보통주가 더 가파르게 하락하여 괴리율 축소</div>
         </div>
         """, unsafe_allow_html=True)
 
-        # 괴리율 좁혀지는 구간대 분석 표 추가[cite: 1]
-        st.markdown("### 📋 괴리율 좁혀짐 구간 상세 표[cite: 1]")
+        # 괴리율 좁혀지는 구간대 분석 표 추가
+        st.markdown("### 📋 괴리율 좁혀짐 구간 상세 표")
         st.markdown("""
         <style>
           .gap-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #e7e5e4; }
@@ -526,11 +527,11 @@ with tab6:
           </tbody>
         </table>
         <div style="font-size: 12px; color: #78716c; margin-top: 10px; line-height: 1.6; margin-bottom: 30px;">
-          * 두 유형 모두 "괴리율 축소 = 우선주의 상대적 강세" 공통점이 있지만, 초록(동반상승)은 둘 다 오르는 국면에서 우선주가 더 빠르게 따라붙은 경우이고, 주황(동반하락)은 둘 다 빠지는 국면에서 보통주가 더 크게 무너진 경우입니다[cite: 1].
+          * 두 유형 모두 "괴리율 축소 = 우선주의 상대적 강세" 공통점이 있지만, 초록(동반상승)은 둘 다 오르는 국면에서 우선주가 더 빠르게 따라붙은 경우이고, 주황(동반하락)은 둘 다 빠지는 국면에서 보통주가 더 크게 무너진 경우입니다.
         </div>
         """, unsafe_allow_html=True)
 
-        # 괴리율 기간별 평균 (1, 3, 5, 10, 20년) - 단어 순서 재조정 완료 ([ 괴리율 X년 평균 ])
+        # 괴리율 기간별 평균 ([ 괴리율 X년 평균 ] 형태 적용)
         st.markdown("### 📈 괴리율 기간별 평균 추이")
         latest_idx = df_samsung.index[-1]
         
