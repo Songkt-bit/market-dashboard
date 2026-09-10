@@ -13,7 +13,7 @@ st.title("📊 Daily Market & Macro Dashboard")
 
 # 2. 데이터 대상 정의
 INDICES = {
-    "코스피": "^KS11", "코스닥": "^KQ11", "S&P 500": "^GSPC",
+    "코스피": "^KS11", "코ส닥": "^KQ11", "S&P 500": "^GSPC",
     "나스닥 종합": "^IXIC", "다우존스 산업": "^DJI",
     "러셀 2000": "^RUT", "필라델피아 반도체": "^SOX"
 }
@@ -434,7 +434,7 @@ with tab5:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (보조 축 활용)
+# [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (음영 오버레이 수정)
 # ==========================================
 with tab6:
     st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 통합 차트")
@@ -458,14 +458,15 @@ with tab6:
             {"start": "2026-05-01", "end": "2026-09-30", "color": "rgba(249,115,22,0.25)"}    # decline
         ]
 
-        # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이
+        # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이 (yref="paper"로 음영 복원)
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
         for ep in episodes:
             fig.add_vrect(
                 x0=ep["start"], x1=ep["end"],
                 fillcolor=ep["color"], opacity=1.0,
-                layer="below", line_width=0
+                layer="below", line_width=0,
+                yref="paper", y0=0, y1=1
             )
 
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
@@ -529,7 +530,7 @@ with tab6:
         </div>
         """, unsafe_allow_html=True)
 
-        # 괴리율 기간별 평균 (1, 3, 5, 10, 20년) - 단어 순서 재조정 적용
+        # 괴리율 기간별 평균 (1, 3, 5, 10, 20년) - 단어 순서 재조정 완료 ([ 괴리율 X년 평균 ])
         st.markdown("### 📈 괴리율 기간별 평균 추이")
         latest_idx = df_samsung.index[-1]
         
