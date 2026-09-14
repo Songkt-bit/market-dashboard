@@ -6,6 +6,8 @@ from plotly.subplots import make_subplots
 import datetime
 import requests
 import io
+import json
+import os
 
 # 1. 웹페이지 기본 설정
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
@@ -202,6 +204,21 @@ def get_dram_csv_data():
     except:
         return pd.DataFrame()
 
+def parse_dram_pct_change(s):
+    """구글 시트의 'Avg Change'/'Low Change' 컬럼(예: '▲13.04 %', '▼2.10 %')을 부호 있는 float로 변환"""
+    if pd.isna(s):
+        return None
+    s = str(s).strip()
+    sign = -1 if ('▼' in s or s.startswith('-')) else 1
+    num = ''.join(ch for ch in s if (ch.isdigit() or ch == '.'))
+    if not num:
+        return None
+    try:
+        return sign * float(num)
+    except ValueError:
+        return None
+
+
 @st.cache_data(ttl=3600)
 def get_samsung_disparity_data(start_date_str):
     df = yf.download(["005930.KS", "005935.KS"], start=start_date_str, progress=False)
@@ -328,6 +345,95 @@ def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
         return df
     df["DATA_VALUE"] = pd.to_numeric(df["DATA_VALUE"], errors="coerce")
     return df
+
+
+# ---------------------------------------------------------------------------
+# ECOS 즐겨찾기 (지금 주목 카드에 실제 추이/변화를 보여줄 지표 최대 10개)
+# ---------------------------------------------------------------------------
+# 100대 지표(KeyStatisticList)는 통계표코드를 안 주기 때문에, 즐겨찾기로 등록한
+# 지표에 한해서만 지표 탐색기와 같은 방식(통계표 검색 → 항목 선택)으로 실제
+# 통계표코드를 한 번 매핑해서 로컬 파일에 저장해둔다. 이 매핑이 있어야만
+# 진짜 과거 시계열(스파크라인·전기대비 변화)을 그릴 수 있다.
+# 로컬 JSON 파일이라 앱을 재배포(깃허브 push → Streamlit Cloud 재빌드)하면
+# 초기화될 수 있다는 점은 감안할 것.
+ECOS_FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecos_favorites.json")
+ECOS_FAVORITES_MAX = 10
+
+
+def load_ecos_favorites() -> dict:
+    """{지표명: None(매핑 대기중) | {stat_code, item_code1, item_code2, cycle}(매핑 완료)}"""
+    if os.path.exists(ECOS_FAVORITES_FILE):
+        try:
+            with open(ECOS_FAVORITES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_ecos_favorites(favs: dict):
+    try:
+        with open(ECOS_FAVORITES_FILE, "w", encoding="utf-8") as f:
+            json.dump(favs, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def guess_ecos_cycle_label(time_str) -> str:
+    """KeyStatisticList의 '시점' 문자열(예: 20230315, 202003, 2023Q1, 2023)로 주기 뱃지 추정"""
+    s = str(time_str).upper()
+    if "Q" in s:
+        return "분기"
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) >= 8:
+        return "일"
+    if len(digits) == 6:
+        return "월"
+    if len(digits) == 4:
+        return "년"
+    return "-"
+
+
+@st.cache_data(ttl=3600)
+def get_ecos_favorite_trend(stat_code: str, cycle: str, item_code1: str, item_code2: str, periods: int = 24):
+    """즐겨찾기 매핑을 이용해 최근 시계열을 가져와 (값 리스트, 최신값, 직전값)을 반환"""
+    if not stat_code:
+        return [], None, None
+    end = datetime.date.today()
+    lookback_days = {"D": 90, "M": 365 * 3, "Q": 365 * 8, "A": 365 * 25}.get(cycle, 365 * 3)
+    start = end - datetime.timedelta(days=lookback_days)
+    df = get_ecos_series(
+        stat_code, cycle, _fmt_ecos_date(start, cycle), _fmt_ecos_date(end, cycle),
+        item_code1 or "", item_code2 or "",
+    )
+    if df.empty:
+        return [], None, None
+    df = df.dropna(subset=["DATA_VALUE"]).tail(periods)
+    values = df["DATA_VALUE"].tolist()
+    latest = values[-1] if values else None
+    prev = values[-2] if len(values) >= 2 else None
+    return values, latest, prev
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip('#')
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def render_ecos_sparkline(values: list, color: str):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        y=values, mode="lines", line=dict(color=color, width=1.6),
+        fill="tozeroy", fillcolor=_hex_to_rgba(color, 0.12),
+    ))
+    fig.update_xaxes(visible=False, showgrid=False)
+    fig.update_yaxes(visible=False, showgrid=False)
+    fig.update_layout(
+        height=46, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
 
 
 # 4. 탭 화면 구성
@@ -529,12 +635,24 @@ with tab5:
             key="dram_gen_select"
         )
 
+        # 시트에 이미 'Avg Change'(예: ▲13.04 %)가 있으니, 우리가 따로 전일 대비를 계산하지 않고
+        # 원본 값을 그대로 최신 카드에 보여줌 (참고했던 다른 시트처럼 가격+변화율을 나란히)
+        metric_cols = st.columns(len(selected_gens)) if selected_gens else []
         fig = go.Figure()
-        for gen in selected_gens:
+        for i, gen in enumerate(selected_gens):
             item_name = REPRESENTATIVE_ITEMS[gen]
             sub = df_dram[df_dram['Item'] == item_name].dropna(subset=['Date', 'Session Average']).sort_values('Date')
             if sub.empty:
                 continue
+            latest_row = sub.iloc[-1]
+            avg_change = parse_dram_pct_change(latest_row.get('Avg Change'))
+            with metric_cols[i]:
+                st.metric(
+                    f"{gen} ({item_name})",
+                    f"{latest_row['Session Average']:,.2f}",
+                    delta=f"{avg_change:+.2f}%" if avg_change is not None else None,
+                    help=f"기준일 {latest_row['Date'].strftime('%Y-%m-%d')}",
+                )
             fig.add_trace(go.Scatter(
                 x=sub['Date'], y=sub['Session Average'],
                 name=f"{gen} ({item_name})", mode='lines+markers',
@@ -785,30 +903,153 @@ with tab8:
             else:
                 st.caption(f"한국은행 ECOS '100대 통계지표' 기준 · 총 {len(df_key)}개 항목")
 
-                # 지금 주목: 관심 키워드로 자동 매칭 (통계표코드를 몰라도 이름으로 찾음)
-                st.markdown("#### 지금 주목")
-                watch_keywords = [
-                    "한국은행 기준금리", "국고채", "회사채", "원/달러", "소비자물가",
-                    "실업률", "경상수지", "경제성장률", "소비자심리", "지니계수",
-                ]
-                cols = st.columns(5)
-                for i, kw in enumerate(watch_keywords):
-                    hit = df_key[df_key["지표명"].str.contains(kw, na=False, regex=False)]
-                    with cols[i % 5]:
-                        if not hit.empty:
-                            row = hit.iloc[0]
-                            st.metric(row["지표명"], f"{row['값']:,.2f} {row['단위']}", help=f"기준시점 {row['시점']}")
+                favorites = load_ecos_favorites()
+
+                # -----------------------------------------------------
+                # 지금 주목 — 즐겨찾기한 지표만 (최대 10개), 실제 추이/변화 표시
+                # -----------------------------------------------------
+                st.markdown(f"#### 지금 주목 · 즐겨찾기 ({len(favorites)}/{ECOS_FAVORITES_MAX})")
+                mapped_favs = [(name, meta) for name, meta in favorites.items() if meta][:ECOS_FAVORITES_MAX]
+                pending_favs = [name for name, meta in favorites.items() if not meta]
+
+                if not mapped_favs and not pending_favs:
+                    st.caption("아직 즐겨찾기한 지표가 없습니다. 아래 '그룹별 보기' 표에서 ⭐ 체크박스를 눌러 추가해보세요.")
+                else:
+                    cols_fav = st.columns(5)
+                    for i, (name, meta) in enumerate(mapped_favs):
+                        values, latest, prev = get_ecos_favorite_trend(
+                            meta["stat_code"], meta["cycle"], meta.get("item_code1", ""), meta.get("item_code2", "")
+                        )
+                        row_match = df_key[df_key["지표명"] == name]
+                        unit = row_match.iloc[0]["단위"] if not row_match.empty else ""
+                        display_val = latest if latest is not None else (row_match.iloc[0]["값"] if not row_match.empty else None)
+                        with cols_fav[i % 5]:
+                            st.caption(name)
+                            st.markdown(f"**{display_val:,.2f}** {unit}" if display_val is not None else "**—**")
+                            if latest is not None and prev is not None:
+                                diff = latest - prev
+                                is_pct_unit = "%" in str(unit)
+                                pct_change = (diff / prev * 100) if prev else 0
+                                delta_str = f"{diff:+.2f}%p" if is_pct_unit else f"{diff:+,.2f} ({pct_change:+.2f}%)"
+                                d_color = "#dc2626" if diff > 0 else ("#2563eb" if diff < 0 else "#6b7280")
+                                st.markdown(f"<span style='color:{d_color}; font-size:12px;'>{delta_str}</span>", unsafe_allow_html=True)
+                            if len(values) >= 2:
+                                spark_color = "#dc2626" if (prev is not None and latest is not None and latest >= prev) else "#2563eb"
+                                st.plotly_chart(
+                                    render_ecos_sparkline(values, spark_color),
+                                    use_container_width=True, config={"displayModeBar": False}, key=f"ecos_spark_{name}",
+                                )
+                            if st.button("즐겨찾기 해제", key=f"ecos_unfav_{name}", use_container_width=True):
+                                favorites.pop(name, None)
+                                save_ecos_favorites(favorites)
+                                st.rerun()
+
+                    if pending_favs:
+                        st.caption(f"⌛ 매핑 대기 중: {', '.join(pending_favs)} — 아래 '즐겨찾기 통계표 연결'에서 이어서 진행해주세요.")
+
+                # -----------------------------------------------------
+                # 매핑 대기 중인 즐겨찾기를 실제 통계표코드에 연결
+                # -----------------------------------------------------
+                if pending_favs:
+                    st.divider()
+                    st.markdown("#### 🔧 즐겨찾기 통계표 연결")
+                    target_name = st.selectbox("연결할 지표:", options=pending_favs, key="ecos_fav_map_target")
+                    default_kw = target_name.split("(")[0].strip()
+                    map_keyword = st.text_input("통계표 검색어:", value=default_kw, key="ecos_fav_map_kw")
+                    if map_keyword:
+                        df_tables_m = search_ecos_stat_table(map_keyword)
+                        if df_tables_m.empty:
+                            st.info("검색 결과가 없습니다. 검색어를 바꿔보세요.")
                         else:
-                            st.metric(kw, "—", help="100대 지표에 없음 → 탐색기 탭에서 검색")
+                            label_m = df_tables_m.apply(
+                                lambda r: f"[{r['STAT_CODE']}] {r['STAT_NAME']} ({r['CYCLE']}, {r['ORG_NAME']})", axis=1
+                            )
+                            sel_m = st.selectbox(
+                                "통계표 선택:", options=range(len(df_tables_m)),
+                                format_func=lambda i: label_m.iloc[i], key="ecos_fav_map_table",
+                            )
+                            stat_code_m = df_tables_m.iloc[sel_m]["STAT_CODE"]
+                            cycle_m = df_tables_m.iloc[sel_m]["CYCLE"]
+                            item_code1_m, item_code2_m = "", ""
+                            df_items_m = get_ecos_item_list(stat_code_m)
+                            if not df_items_m.empty and "ITEM_CODE" in df_items_m.columns:
+                                item_label_m = df_items_m.apply(
+                                    lambda r: f"{r['ITEM_NAME']} ({r.get('START_TIME','')}~{r.get('END_TIME','')})", axis=1
+                                )
+                                item_idx_m = st.selectbox(
+                                    "세부 항목 선택:", options=range(len(df_items_m)),
+                                    format_func=lambda i: item_label_m.iloc[i], key="ecos_fav_map_item",
+                                )
+                                item_code1_m = df_items_m.iloc[item_idx_m]["ITEM_CODE"]
+                                cycle_m = df_items_m.iloc[item_idx_m].get("CYCLE", cycle_m)
+                            if st.button("이 통계표로 연결하기", type="primary", key="ecos_fav_map_confirm"):
+                                favorites[target_name] = {
+                                    "stat_code": stat_code_m, "item_code1": item_code1_m,
+                                    "item_code2": item_code2_m, "cycle": cycle_m,
+                                }
+                                save_ecos_favorites(favorites)
+                                st.rerun()
 
                 st.divider()
                 st.markdown("#### 그룹별 보기")
                 for grp, sub in df_key.groupby("그룹"):
                     with st.expander(f"{grp} ({len(sub)}종)"):
-                        st.dataframe(
-                            sub[["지표명", "값", "단위", "시점"]],
-                            use_container_width=True, hide_index=True,
+                        rows = []
+                        for _, r in sub.iterrows():
+                            name = r["지표명"]
+                            meta = favorites.get(name)
+                            trend_vals = []
+                            change_str = "—"
+                            if meta:
+                                values, latest, prev = get_ecos_favorite_trend(
+                                    meta["stat_code"], meta["cycle"], meta.get("item_code1", ""), meta.get("item_code2", "")
+                                )
+                                trend_vals = values
+                                if latest is not None and prev is not None:
+                                    diff = latest - prev
+                                    is_pct_unit = "%" in str(r["단위"])
+                                    pct_change = (diff / prev * 100) if prev else 0
+                                    change_str = f"{diff:+.2f}%p" if is_pct_unit else f"{diff:+,.2f} ({pct_change:+.2f}%)"
+                            rows.append({
+                                "즐겨찾기": name in favorites,
+                                "지표": name,
+                                "추이": trend_vals,
+                                "최신값": r["값"],
+                                "단위": r["단위"],
+                                "변화": change_str,
+                                "기준시점": r["시점"],
+                                "주기": guess_ecos_cycle_label(r["시점"]),
+                            })
+                        disp_df = pd.DataFrame(rows)
+
+                        edited = st.data_editor(
+                            disp_df,
+                            column_config={
+                                "즐겨찾기": st.column_config.CheckboxColumn("⭐"),
+                                "추이": st.column_config.LineChartColumn("추이", width="small"),
+                                "최신값": st.column_config.NumberColumn("최신값", format="%.2f"),
+                            },
+                            disabled=["지표", "추이", "최신값", "단위", "변화", "기준시점", "주기"],
+                            hide_index=True, use_container_width=True, key=f"ecos_group_{grp}",
                         )
+
+                        changed = False
+                        for _, er in edited.iterrows():
+                            name = er["지표"]
+                            was_fav = name in favorites
+                            now_fav = bool(er["즐겨찾기"])
+                            if now_fav and not was_fav:
+                                if len(favorites) >= ECOS_FAVORITES_MAX:
+                                    st.warning(f"즐겨찾기는 최대 {ECOS_FAVORITES_MAX}개까지예요. 먼저 하나를 해제해주세요.")
+                                else:
+                                    favorites[name] = None  # 매핑 대기 상태로 우선 추가
+                                    changed = True
+                            elif not now_fav and was_fav:
+                                favorites.pop(name, None)
+                                changed = True
+                        if changed:
+                            save_ecos_favorites(favorites)
+                            st.rerun()
 
         # -----------------------------------------------------------------
         # 지표 탐색기 — 100대 지표에 없는 세부 시계열을 직접 찾아 차트로
