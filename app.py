@@ -213,55 +213,6 @@ def get_samsung_disparity_data(start_date_str):
     res_df['Disparity'] = ((res_df['Common'] - res_df['Preferred']) / res_df['Common']) * 100
     return res_df
 
-@st.cache_data(ttl=3600)
-def get_auto_macro_calendar():
-    events = [
-        {"Date": "2026-09-02", "Category": "고용", "Title": "미 ADP 취업자 변동", "Details": "ADP · 08:15 ET", "IsCore": "일반", "Actual": "99K", "Previous": "111K", "Forecast": "115K"},
-        {"Date": "2026-09-03", "Category": "경기실물", "Title": "미 ISM 제조업 PMI", "Details": "ISM · 10:00 ET", "IsCore": "일반", "Actual": "47.9", "Previous": "46.8", "Forecast": "47.5"},
-        {"Date": "2026-09-04", "Category": "고용", "Title": "월간 비농업 고용보고서 (실업률 포함)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "162K", "Previous": "21K", "Forecast": "55K"},
-        {"Date": "2026-09-10", "Category": "고용", "Title": "주간 신규 실업수당 청구 건수", "Details": "미 노동부 · 08:30 ET", "IsCore": "일반", "Actual": "230K", "Previous": "232K", "Forecast": "230K"},
-        {"Date": "2026-09-11", "Category": "물가", "Title": "미국 CPI (소비자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "2.9%", "Forecast": "2.6%"},
-        {"Date": "2026-09-12", "Category": "물가", "Title": "미국 PPI (생산자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "일반", "Actual": "-", "Previous": "2.2%", "Forecast": "2.1%"},
-        {"Date": "2026-09-15", "Category": "경기실물", "Title": "소매판매", "Details": "미 센서스국 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "0.1%", "Forecast": "0.3%"},
-        {"Date": "2026-09-16", "Category": "통화정책", "Title": "FOMC 금리 결정 및 점도표 공개", "Details": "미 연준 · 14:00 ET (SEP 포함)", "IsCore": "핵심", "Actual": "-", "Previous": "5.50%", "Forecast": "5.25%"},
-        {"Date": "2026-09-16", "Category": "통화정책", "Title": "파월 연준 의장 기자회견", "Details": "FOMC 직후 · 14:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "-", "Forecast": "-"},
-        {"Date": "2026-09-24", "Category": "경기실물", "Title": "미국 GDP (확정치/속보치)", "Details": "미 상무부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "3.0%", "Forecast": "2.9%"},
-        {"Date": "2026-09-30", "Category": "물가", "Title": "미국 근원 PCE 물가지수", "Details": "미 상무부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "2.6%", "Forecast": "2.5%"},
-        {"Date": "2026-10-07", "Category": "통화정책", "Title": "FOMC 회의록 공개", "Details": "미 연준 (3주 전 회의)", "IsCore": "일반", "Actual": "-", "Previous": "-", "Forecast": "-"},
-        {"Date": "2026-10-14", "Category": "물가", "Title": "미국 CPI (소비자물가지수)", "Details": "미 노동부 · 08:30 ET", "IsCore": "핵심", "Actual": "-", "Previous": "-", "Forecast": "-"},
-    ]
-    df = pd.DataFrame(events)
-    df['Date_obj'] = pd.to_datetime(df['Date']).dt.date
-    today = datetime.date.today()
-    df['D-day'] = df['Date_obj'].apply(lambda x: (x - today).days)
-    return df
-
-@st.cache_data(ttl=3600)
-def get_indicator_history(title):
-    if "CPI" in title:
-        return pd.DataFrame([
-            {"발표일": "2026-08-12", "참고": "Jul", "실제": "2.9%", "이전": "3.0%", "예측치": "3.0%"},
-            {"발표일": "2026-07-15", "참고": "Jun", "실제": "3.0%", "이전": "3.3%", "예측치": "3.1%"},
-            {"발표일": "2026-06-12", "참고": "May", "실제": "3.3%", "이전": "3.4%", "예측치": "3.4%"}
-        ])
-    elif "고용보고서" in title or "고용" in title:
-        return pd.DataFrame([
-            {"발표일": "2026-09-04", "참고": "Aug", "실제": "162K", "이전": "21K", "예측치": "55K"},
-            {"발표일": "2026-08-07", "참고": "Jul", "실제": "89K", "이전": "114K", "예측치": "175K"},
-            {"발표일": "2026-07-03", "참고": "Jun", "실제": "114K", "이전": "218K", "예측치": "190K"}
-        ])
-    elif "FOMC" in title or "기자회견" in title or "통화정책" in title:
-        return pd.DataFrame([
-            {"발표일": "2026-07-29", "참고": "Jul", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"},
-            {"발표일": "2026-06-12", "참고": "Jun", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"},
-            {"발표일": "2026-05-01", "참고": "May", "실제": "5.50%", "이전": "5.50%", "예측치": "5.50%"}
-        ])
-    else:
-        return pd.DataFrame([
-            {"발표일": "2026-08-15", "참고": "Prior", "실제": "이전 발표", "이전": "직전 수치", "예측치": "시장 컨센서스"}
-        ])
-
-
 # ===========================================================================
 # ECOS(한국은행 경제통계시스템) Open API 연동 함수
 # ===========================================================================
@@ -380,11 +331,11 @@ def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
 
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
-    "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터",
-    "🏦 Page 9: ECOS 매크로 지표"
+    "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
+    "🏦 Page 8: ECOS 매크로 지표"
 ])
 
 # ==========================================
@@ -557,6 +508,56 @@ with tab5:
     st.info("💡 구글 시트에 실시간 연동된 D램 가격 및 변동성 데이터를 불러와 시각화합니다.")
     df_dram = get_dram_csv_data()
     if not df_dram.empty:
+        # 시트의 실제 컬럼 구성(DDR4/DDR5 등 종류, 변동성 컬럼 개수)을 코드가 미리 알 수 없으므로,
+        # 첫 컬럼을 날짜/구간 축으로 보고 나머지 숫자형 컬럼들을 자동으로 시리즈로 인식해서 그림.
+        # ('변동' 이 들어간 컬럼명은 변동성으로 보고 보조축 + 점선으로 구분)
+        date_col = df_dram.columns[0]
+        value_cols = []
+        for c in df_dram.columns[1:]:
+            numeric = pd.to_numeric(df_dram[c], errors='coerce')
+            if numeric.notna().sum() >= max(3, len(df_dram) * 0.3):
+                value_cols.append(c)
+
+        if value_cols:
+            x_axis = pd.to_datetime(df_dram[date_col], errors='coerce')
+            if x_axis.isna().all():
+                x_axis = df_dram[date_col]
+
+            vol_cols = [c for c in value_cols if '변동' in c]
+            price_cols = [c for c in value_cols if c not in vol_cols]
+
+            selected_cols = st.multiselect(
+                "표시할 항목 선택 (DDR 종류/가격 유형별로 켜고 끌 수 있어요):",
+                options=value_cols, default=price_cols or value_cols,
+                key="dram_series_select"
+            )
+
+            palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+                       '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            for i, col in enumerate(selected_cols):
+                y_vals = pd.to_numeric(df_dram[col], errors='coerce')
+                is_vol = col in vol_cols
+                fig.add_trace(
+                    go.Scatter(
+                        x=x_axis, y=y_vals, name=col, mode='lines',
+                        line=dict(color=palette[i % len(palette)], width=2, dash='dot' if is_vol else 'solid'),
+                    ),
+                    secondary_y=is_vol
+                )
+            fig.update_layout(
+                title="<b>D램 가격/변동성 추이</b>",
+                height=480, margin=dict(l=20, r=20, t=40, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+            )
+            fig.update_yaxes(title_text="가격", secondary_y=False)
+            if vol_cols:
+                fig.update_yaxes(title_text="변동성", secondary_y=True)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("숫자형 데이터 컬럼을 자동으로 인식하지 못했습니다. 아래 원본 표를 확인해주세요.")
+
         st.dataframe(df_dram, use_container_width=True)
     else:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
@@ -680,68 +681,9 @@ with tab6:
         st.warning("삼성전자 주가 데이터를 불러오지 못했습니다.")
 
 # ==========================================
-# [Page 7] 금융 소식 캘린더 (TradingEconomics 스타일 고도화)
+# [Page 7] 한국 수출입 데이터 (구글 시트 연동)
 # ==========================================
 with tab7:
-    st.subheader("📅 미국 핵심 매크로 캘린더 & 지표별 과거 추이 (TradingEconomics 스타일)")
-    st.markdown("""
-    <style>
-    .event-card { padding: 12px; border-radius: 6px; border: 1px solid #e0e0e0; margin-bottom: 8px; background-color: #fafafa; }
-    @media (prefers-color-scheme: dark) { .event-card { background-color: #1e1e1e; border: 1px solid #333; } }
-    </style>
-    """, unsafe_allow_html=True)
-
-    df_cal = get_auto_macro_calendar()
-
-    col_cal_left, col_cal_right = st.columns([1.5, 1])
-
-    with col_cal_left:
-        st.markdown("### 🗓️ 전체 경제 일정 및 발표 결과")
-        categories = ["전체", "통화정책", "물가", "고용", "경기실물"]
-        selected_cat = st.selectbox("분류 필터:", options=categories, key="cal_filter")
-
-        df_display = df_cal.copy()
-        if selected_cat != "전체":
-            df_display = df_display[df_display['Category'] == selected_cat]
-
-        df_show = df_display[['Date', 'Category', 'Title', 'Actual', 'Previous', 'Forecast', 'D-day']].rename(
-            columns={'Date': '날짜', 'Category': '분류', 'Title': '경제지표명', 'Actual': '실제', 'Previous': '이전', 'Forecast': '예측치'}
-        )
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
-
-    with col_cal_right:
-        st.markdown("### 📊 지표별 과거 발표 추이")
-        past_events = df_cal[df_cal['D-day'] <= 0]['Title'].tolist()
-        if past_events:
-            selected_indicator = st.selectbox("조회할 경제지표 선택:", options=past_events, key="indicator_history_select")
-
-            history_df = get_indicator_history(selected_indicator)
-            st.markdown(f"**📌 [{selected_indicator}] 역사적 추이**")
-            st.dataframe(history_df, use_container_width=True, hide_index=True)
-
-            st.markdown("---")
-            st.markdown("### 🔥 다가오는 핵심 일정 (Key Events)")
-            core_events = df_cal[(df_cal['IsCore'] == '핵심') & (df_cal['D-day'] >= 0)].sort_values('D-day').head(3)
-            if not core_events.empty:
-                for _, row in core_events.iterrows():
-                    d_val = row['D-day']
-                    d_str = "D-Day" if d_val == 0 else f"D-{d_val}"
-                    d_color = "red" if d_val <= 3 else "blue"
-                    card_html = f"""
-                    <div class="event-card">
-                        <b>[{row['Category']}] {row['Title']}</b><br>
-                        <span style="color:gray; font-size:12px;">{row['Details']} ({row['Date']})</span><br>
-                        <span style="color:{d_color}; font-size:11px; font-weight:bold;">{d_str}</span>
-                    </div>
-                    """
-                    st.markdown(card_html, unsafe_allow_html=True)
-        else:
-            st.info("조회할 과거 지표가 없습니다.")
-
-# ==========================================
-# [Page 8] 한국 수출입 데이터 (구글 시트 연동)
-# ==========================================
-with tab8:
     st.subheader("🚢 대한민국 수출입 데이터 시각화 (2000년 ~ 현재)")
     st.info("💡 구글 시트에 연동된 한국은행 ECOS 실시간 데이터를 바탕으로 수출 명목금액 및 전년 동월 대비 증가율(YoY)을 조회합니다.")
 
@@ -772,21 +714,6 @@ with tab8:
             key="export_view_mode"
         )
 
-        df_table = df_export.copy()
-        df_table['수출액'] = df_table['수출액'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "")
-        df_table['YoY(%)'] = df_table['YoY(%)'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
-
-        st.dataframe(
-            df_table,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Date": st.column_config.TextColumn("Date", width="small"),
-                "수출액": st.column_config.TextColumn("수출액 (천불)", width="small"),
-                "YoY(%)": st.column_config.TextColumn("YoY (%)", width="small"),
-            }
-        )
-
         if 'Date' in df_export.columns:
             if view_mode == "전년 동월 대비 증가율 (YoY %)":
                 df_chart = df_export.dropna(subset=['YoY(%)']).copy()
@@ -794,9 +721,6 @@ with tab8:
 
                 kospi_df = get_kospi_monthly_data()
                 merged = pd.merge(df_chart, kospi_df, on='YearMonth', how='inner')
-
-                corr_value = merged['YoY(%)'].corr(merged['KOSPI']) if len(merged) > 1 else None
-                corr_text = f" | 상관계수(2000~현재): {corr_value:.3f}" if corr_value is not None else ""
 
                 colors = ['#1f77b4' if v >= 0 else '#ff7f0e' for v in merged['YoY(%)']]
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -810,7 +734,7 @@ with tab8:
                 ), secondary_y=True)
 
                 fig.update_layout(
-                    title=f"<b>대한민국 월별 수출 증가율(YoY %) vs 코스피 지수</b>{corr_text}",
+                    title="<b>대한민국 월별 수출 증가율(YoY %) vs 코스피 지수</b>",
                     xaxis_title="기간 (YY.MM)",
                     height=450,
                     margin=dict(l=20, r=20, t=40, b=20),
@@ -843,9 +767,9 @@ with tab8:
         st.warning("구글 시트 수출 데이터를 불러오지 못했습니다. '파일 -> 공유 -> 웹에 게시(CSV)' 링크를 확인해주세요.")
 
 # ==========================================
-# [Page 9] ECOS 매크로 지표 (한국은행 Open API)
+# [Page 8] ECOS 매크로 지표 (한국은행 Open API)
 # ==========================================
-with tab9:
+with tab8:
     st.subheader("🏦 ECOS 매크로 지표 (한국은행 Open API)")
 
     if not ECOS_API_KEY:
