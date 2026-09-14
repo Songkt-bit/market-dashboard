@@ -504,60 +504,54 @@ with tab4:
 # [Page 5] 반도체(D램) 가격 추이
 # ==========================================
 with tab5:
-    st.subheader("💾 D램 현물 및 고정거래 가격 추이 (구글 시트 연동)")
-    st.info("💡 구글 시트에 실시간 연동된 D램 가격 및 변동성 데이터를 불러와 시각화합니다.")
+    st.subheader("💾 D램 현물 가격 추이 (세대별 대표 SKU · 구글 시트 연동)")
+    st.info("💡 구글 시트에 실시간 연동된 D램 세션 평균가를 세대별(DDR5/DDR4/DDR3) 대표 SKU 기준으로 시각화합니다.")
     df_dram = get_dram_csv_data()
-    if not df_dram.empty:
-        # 시트의 실제 컬럼 구성(DDR4/DDR5 등 종류, 변동성 컬럼 개수)을 코드가 미리 알 수 없으므로,
-        # 첫 컬럼을 날짜/구간 축으로 보고 나머지 숫자형 컬럼들을 자동으로 시리즈로 인식해서 그림.
-        # ('변동' 이 들어간 컬럼명은 변동성으로 보고 보조축 + 점선으로 구분)
-        date_col = df_dram.columns[0]
-        value_cols = []
-        for c in df_dram.columns[1:]:
-            numeric = pd.to_numeric(df_dram[c], errors='coerce')
-            if numeric.notna().sum() >= max(3, len(df_dram) * 0.3):
-                value_cols.append(c)
+    if not df_dram.empty and {'Date', 'Item', 'Session Average'}.issubset(df_dram.columns):
+        df_dram['Date'] = pd.to_datetime(df_dram['Date'], errors='coerce')
+        df_dram['Session Average'] = pd.to_numeric(df_dram['Session Average'], errors='coerce')
 
-        if value_cols:
-            x_axis = pd.to_datetime(df_dram[date_col], errors='coerce')
-            if x_axis.isna().all():
-                x_axis = df_dram[date_col]
+        # 시트가 한 행 = (날짜, SKU 하나) 롱포맷이라 SKU 7종이 다 섞여 있음.
+        # 세대별로 하나씩만 대표 SKU를 골라서 비교 가능하게 함.
+        # DDR4·DDR3는 업계에서 관행적으로 현물가 벤치마크로 쓰는 '칩(다이)' 단위 SKU를 택했고,
+        # DDR5는 시트에 칩 단위 항목이 없어 유일하게 있는 모듈(SO-DIMM) 가격을 그대로 씀.
+        # → 원하는 SKU가 다르면 아래 REPRESENTATIVE_ITEMS 값만 바꾸면 됨 (df_dram['Item'].unique()로 전체 목록 확인 가능)
+        REPRESENTATIVE_ITEMS = {
+            "DDR5": "DDR5 8GB SO-DIMM",
+            "DDR4": "DDR4 8Gb 1Gx8",
+            "DDR3": "DDR3 4Gb 256Mx16",
+        }
+        palette = {"DDR5": "#4f46e5", "DDR4": "#ff7f0e", "DDR3": "#16a34a"}
 
-            vol_cols = [c for c in value_cols if '변동' in c]
-            price_cols = [c for c in value_cols if c not in vol_cols]
+        available_gens = [g for g, item in REPRESENTATIVE_ITEMS.items() if (df_dram['Item'] == item).any()]
+        selected_gens = st.multiselect(
+            "표시할 세대 선택:", options=available_gens, default=available_gens,
+            key="dram_gen_select"
+        )
 
-            selected_cols = st.multiselect(
-                "표시할 항목 선택 (DDR 종류/가격 유형별로 켜고 끌 수 있어요):",
-                options=value_cols, default=price_cols or value_cols,
-                key="dram_series_select"
-            )
+        fig = go.Figure()
+        for gen in selected_gens:
+            item_name = REPRESENTATIVE_ITEMS[gen]
+            sub = df_dram[df_dram['Item'] == item_name].dropna(subset=['Date', 'Session Average']).sort_values('Date')
+            if sub.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=sub['Date'], y=sub['Session Average'],
+                name=f"{gen} ({item_name})", mode='lines+markers',
+                line=dict(color=palette[gen], width=2), marker=dict(size=4),
+            ))
+        fig.update_layout(
+            title="<b>D램 현물 평균가(Session Average) 추이</b>",
+            height=480, margin=dict(l=20, r=20, t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        )
+        fig.update_yaxes(title_text="가격")
+        st.plotly_chart(fig, use_container_width=True)
 
-            palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
-                       '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            for i, col in enumerate(selected_cols):
-                y_vals = pd.to_numeric(df_dram[col], errors='coerce')
-                is_vol = col in vol_cols
-                fig.add_trace(
-                    go.Scatter(
-                        x=x_axis, y=y_vals, name=col, mode='lines',
-                        line=dict(color=palette[i % len(palette)], width=2, dash='dot' if is_vol else 'solid'),
-                    ),
-                    secondary_y=is_vol
-                )
-            fig.update_layout(
-                title="<b>D램 가격/변동성 추이</b>",
-                height=480, margin=dict(l=20, r=20, t=40, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-            )
-            fig.update_yaxes(title_text="가격", secondary_y=False)
-            if vol_cols:
-                fig.update_yaxes(title_text="변동성", secondary_y=True)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.caption("숫자형 데이터 컬럼을 자동으로 인식하지 못했습니다. 아래 원본 표를 확인해주세요.")
-
+        with st.expander("SKU 7종 전체 원본 데이터 보기"):
+            st.dataframe(df_dram, use_container_width=True)
+    elif not df_dram.empty:
+        st.caption("시트 컬럼 구성이 예상(Date/Item/Session Average)과 달라 자동 차트를 그리지 못했습니다. 아래 원본 표를 확인해주세요.")
         st.dataframe(df_dram, use_container_width=True)
     else:
         st.warning("구글 시트 데이터를 불러오지 못했습니다.")
