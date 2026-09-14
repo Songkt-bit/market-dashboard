@@ -26,6 +26,15 @@ FX_TICKERS = {
     "WTI 원유 ($/배럴)": "CL=F"
 }
 
+# ECOS(한국은행 경제통계시스템) Open API 설정
+# 키는 코드에 직접 쓰지 않고 st.secrets로 읽습니다.
+# 로컬: 프로젝트 루트에 .streamlit/secrets.toml 파일을 만들고
+#   ECOS_API_KEY = "발급받은_인증키"
+# 한 줄만 넣으면 됩니다. (.gitignore에 반드시 추가)
+# Streamlit Community Cloud 배포 시에는 앱 Settings → Secrets에 동일하게 추가합니다.
+ECOS_API_KEY = st.secrets.get("ECOS_API_KEY", "")
+ECOS_BASE = "https://ecos.bok.or.kr/api"
+
 # 기간 선택에 따른 시작일 계산 헬퍼 함수
 def get_start_date(period_option):
     today = datetime.date.today()
@@ -252,19 +261,138 @@ def get_indicator_history(title):
             {"발표일": "2026-08-15", "참고": "Prior", "실제": "이전 발표", "이전": "직전 수치", "예측치": "시장 컨센서스"}
         ])
 
+
+# ===========================================================================
+# ECOS(한국은행 경제통계시스템) Open API 연동 함수
+# ===========================================================================
+
+def _ecos_get(url: str) -> dict:
+    """ECOS API 공통 호출 + 에러 응답(RESULT.CODE) 처리"""
+    try:
+        res = requests.get(url, timeout=15)
+        data = res.json()
+    except Exception as e:
+        return {"_error": f"요청 실패: {e}"}
+    if "RESULT" in data:
+        # 인증키 오류(ERROR-1xx), 데이터 없음(INFO-200) 등
+        msg = data["RESULT"].get("MESSAGE", "알 수 없는 오류")
+        code = data["RESULT"].get("CODE", "")
+        return {"_error": f"[{code}] {msg}"}
+    return data
+
+
+@st.cache_data(ttl=3600)
+def get_ecos_key_statistics() -> pd.DataFrame:
+    """
+    100대 통계지표(KeyStatisticList) — 금리·환율·물가·경기·고용·국제수지 등
+    '주요 카테고리 전체'를 통계표코드 하나하나 몰라도 한 번에 받아오는 API.
+    한국은행이 분류해 둔 그룹(CLASS_NAME) 그대로 반환하므로, butler.works 대시보드의
+    "그룹별 보기"와 거의 동일한 구조로 바로 붙일 수 있음.
+    """
+    if not ECOS_API_KEY:
+        return pd.DataFrame()
+    url = f"{ECOS_BASE}/KeyStatisticList/{ECOS_API_KEY}/json/kr/1/100"
+    data = _ecos_get(url)
+    if "_error" in data or "KeyStatisticList" not in data:
+        return pd.DataFrame()
+    rows = data["KeyStatisticList"]["row"]
+    df = pd.DataFrame(rows).rename(columns={
+        "CLASS_NAME": "그룹", "KEYSTAT_NAME": "지표명",
+        "DATA_VALUE": "값", "CYCLE": "시점", "UNIT_NAME": "단위",
+    })
+    df["값"] = pd.to_numeric(df["값"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400)
+def search_ecos_stat_table(keyword: str) -> pd.DataFrame:
+    """
+    통계표코드 검색(StatisticTableList) — 전체 통계표 목록(약 1,000여 개)을 받아
+    이름에 keyword가 들어간 것만 걸러줌. 100대 지표에 없는 세부 지표(예: 선행지수
+    순환변동치의 원계열, 특정 만기 국고채 등)를 찾을 때 사용.
+    SRCH_YN == 'Y' 인 것만 남기는데, 이게 실제로 StatisticSearch로 시계열을
+    조회할 수 있는 '말단' 통계표라는 뜻.
+    """
+    if not ECOS_API_KEY or not keyword:
+        return pd.DataFrame()
+    url = f"{ECOS_BASE}/StatisticTableList/{ECOS_API_KEY}/json/kr/1/3000"
+    data = _ecos_get(url)
+    if "_error" in data or "StatisticTableList" not in data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data["StatisticTableList"]["row"])
+    if df.empty or "STAT_NAME" not in df.columns:
+        return pd.DataFrame()
+    df = df[df["STAT_NAME"].str.contains(keyword, na=False, regex=False)]
+    if "SRCH_YN" in df.columns:
+        df = df[df["SRCH_YN"] == "Y"]
+    return df[["STAT_CODE", "STAT_NAME", "CYCLE", "ORG_NAME"]].reset_index(drop=True)
+
+
+@st.cache_data(ttl=86400)
+def get_ecos_item_list(stat_code: str) -> pd.DataFrame:
+    """통계 세부항목 목록(StatisticItemList) — 특정 통계표코드 안의 세부 항목들"""
+    if not ECOS_API_KEY or not stat_code:
+        return pd.DataFrame()
+    url = f"{ECOS_BASE}/StatisticItemList/{ECOS_API_KEY}/json/kr/1/1000/{stat_code}"
+    data = _ecos_get(url)
+    if "_error" in data or "StatisticItemList" not in data:
+        return pd.DataFrame()
+    return pd.DataFrame(data["StatisticItemList"]["row"])
+
+
+def _fmt_ecos_date(d: datetime.date, cycle: str) -> str:
+    """date 객체를 주기(cycle)에 맞는 ECOS 날짜 문자열로 변환"""
+    if cycle == "A":
+        return f"{d.year}"
+    if cycle == "Q":
+        return f"{d.year}Q{(d.month - 1)//3 + 1}"
+    if cycle == "M":
+        return f"{d.year}{d.month:02d}"
+    if cycle == "D":
+        return f"{d.year}{d.month:02d}{d.day:02d}"
+    return f"{d.year}{d.month:02d}"  # 기본값(월)
+
+
+@st.cache_data(ttl=3600)
+def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
+                     item_code1: str = "", item_code2: str = "") -> pd.DataFrame:
+    """
+    통계 조회(StatisticSearch) — 실제 시계열 데이터.
+    start/end는 이미 주기에 맞게 포맷된 문자열(예: "20200101", "202501", "2025Q1")이어야 함.
+    """
+    if not ECOS_API_KEY or not stat_code:
+        return pd.DataFrame()
+    parts = [ECOS_BASE, "StatisticSearch", ECOS_API_KEY, "json", "kr",
+              "1", "100000", stat_code, cycle, start, end]
+    if item_code1:
+        parts.append(item_code1)
+    if item_code2:
+        parts.append(item_code2)
+    url = "/".join(parts)
+    data = _ecos_get(url)
+    if "_error" in data or "StatisticSearch" not in data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data["StatisticSearch"]["row"])
+    if df.empty:
+        return df
+    df["DATA_VALUE"] = pd.to_numeric(df["DATA_VALUE"], errors="coerce")
+    return df
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재", 
-    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)", 
-    "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터"
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
+    "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
+    "📉 Page 6: 삼성전자 괴리율", "📅 Page 7: 금융 캘린더", "🚢 Page 8: 한국 수출데이터",
+    "🏦 Page 9: ECOS 매크로 지표"
 ])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
 # ==========================================
 with tab_home:
-    col_left, col_right = st.columns([1, 1.2]) 
-    
+    col_left, col_right = st.columns([1, 1.2])
+
     with col_left:
         st.subheader("최근 3년 & YTD 글로벌 시장 요약")
         df_summary, today_col = get_summary_table_data()
@@ -276,7 +404,7 @@ with tab_home:
             today_col: "{:,.2f}", "YTD": "{:+.2f}%"
         }).map(highlight_ytd, subset=['YTD'])
         st.dataframe(formatted_df, use_container_width=True, hide_index=True)
-        
+
     with col_right:
         st.subheader("🔥 코스피 월별/연간 수익률 히트맵 (1997~현재)")
         full_df = get_kospi_heatmap_data()
@@ -337,11 +465,11 @@ with tab1:
         period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
     with col_s1:
         scale_option_1 = st.radio("차트 축 스케일 선택:", ["선형 축 (Linear)", "로그 축 (Log)"], index=0, horizontal=True, key="m_s1")
-    
+
     start_date_1 = get_start_date(period_option_1)
     market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
     is_log_scale = "로그" in scale_option_1
-    
+
     cols1 = st.columns(2)
     for idx, (name, df_m) in enumerate(market_data.items()):
         with cols1[idx % 2]:
@@ -368,7 +496,7 @@ with tab2:
     period_option_2 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="fx_p2")
     start_date_2 = get_start_date(period_option_2)
     fx_data_dict = get_fx_long_data(FX_TICKERS, start_date_2.strftime("%Y-%m-%d"))
-    
+
     cols2 = st.columns(2)
     for idx, (name, df_fx) in enumerate(fx_data_dict.items()):
         with cols2[idx % 2]:
@@ -397,7 +525,7 @@ with tab3:
     period_option_3 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="macro_p3")
     start_date_3 = get_start_date(period_option_3)
     df_macro = get_macro_correlation_data(start_date_3.strftime("%Y-%m-%d"))
-    
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['US10Y'], name="미국 국채 10년(좌)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['KOSPI'], name="코스피(우)", line=dict(color='black', width=2)), secondary_y=True)
@@ -439,7 +567,7 @@ with tab5:
 with tab6:
     st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 통합 차트")
     st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다.")
-    
+
     period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=3, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
     df_samsung = get_samsung_disparity_data(start_date_6.strftime("%Y-%m-%d"))
@@ -460,7 +588,7 @@ with tab6:
 
         # 단일 차트에 주가(좌측 축)와 괴리율(우측 축) 통합 오버레이 (xref="x", yref="paper" 적용으로 음영 정상 출력)
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        
+
         for ep in episodes:
             fig.add_vrect(
                 x0=ep["start"], x1=ep["end"],
@@ -472,15 +600,15 @@ with tab6:
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Common'], name="보통주 (본주)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Preferred'], name="우선주", line=dict(color='#ff7f0e', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_samsung.index, y=df_samsung['Disparity'], name="괴리율 (%)", line=dict(color='#4f46e5', width=1.5, dash='dot')), secondary_y=True)
-        
+
         latest_common = df_samsung['Common'].iloc[-1]
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
-        
+
         fig.update_layout(
-            title=f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%", 
-            margin=dict(l=20, r=20, t=40, b=20), 
-            height=500, 
+            title=f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=500,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
         )
         fig.update_xaxes(matches='x')
@@ -534,7 +662,7 @@ with tab6:
         # 괴리율 기간별 평균 ([ 괴리율 X년 평균 ] 형태 적용)
         st.markdown("### 📈 괴리율 기간별 평균 추이")
         latest_idx = df_samsung.index[-1]
-        
+
         avg_1y = df_samsung.loc[df_samsung.index >= latest_idx - pd.DateOffset(years=1), 'Disparity'].mean()
         avg_3y = df_samsung.loc[df_samsung.index >= latest_idx - pd.DateOffset(years=3), 'Disparity'].mean()
         avg_5y = df_samsung.loc[df_samsung.index >= latest_idx - pd.DateOffset(years=5), 'Disparity'].mean()
@@ -713,3 +841,118 @@ with tab8:
                 st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("구글 시트 수출 데이터를 불러오지 못했습니다. '파일 -> 공유 -> 웹에 게시(CSV)' 링크를 확인해주세요.")
+
+# ==========================================
+# [Page 9] ECOS 매크로 지표 (한국은행 Open API)
+# ==========================================
+with tab9:
+    st.subheader("🏦 ECOS 매크로 지표 (한국은행 Open API)")
+
+    if not ECOS_API_KEY:
+        st.error(
+            "ECOS_API_KEY가 설정되어 있지 않습니다. "
+            ".streamlit/secrets.toml (로컬) 또는 앱 Settings → Secrets(클라우드 배포 시)에 "
+            'ECOS_API_KEY = "발급받은 키" 를 추가해주세요.'
+        )
+    else:
+        sub_summary, sub_explorer = st.tabs(["📋 100대 통계지표 요약", "🔍 지표 탐색기 (임의 통계표 조회)"])
+
+        # -----------------------------------------------------------------
+        # 100대 통계지표 요약 — butler.works의 "지금 주목" + "그룹별 보기"에 대응
+        # -----------------------------------------------------------------
+        with sub_summary:
+            df_key = get_ecos_key_statistics()
+            if df_key.empty:
+                st.warning("데이터를 불러오지 못했습니다. API 키 또는 네트워크 상태를 확인해주세요.")
+            else:
+                st.caption(f"한국은행 ECOS '100대 통계지표' 기준 · 총 {len(df_key)}개 항목")
+
+                # 지금 주목: 관심 키워드로 자동 매칭 (통계표코드를 몰라도 이름으로 찾음)
+                st.markdown("#### 지금 주목")
+                watch_keywords = [
+                    "한국은행 기준금리", "국고채", "회사채", "원/달러", "소비자물가",
+                    "실업률", "경상수지", "경제성장률", "소비자심리", "지니계수",
+                ]
+                cols = st.columns(5)
+                for i, kw in enumerate(watch_keywords):
+                    hit = df_key[df_key["지표명"].str.contains(kw, na=False, regex=False)]
+                    with cols[i % 5]:
+                        if not hit.empty:
+                            row = hit.iloc[0]
+                            st.metric(row["지표명"], f"{row['값']:,.2f} {row['단위']}", help=f"기준시점 {row['시점']}")
+                        else:
+                            st.metric(kw, "—", help="100대 지표에 없음 → 탐색기 탭에서 검색")
+
+                st.divider()
+                st.markdown("#### 그룹별 보기")
+                for grp, sub in df_key.groupby("그룹"):
+                    with st.expander(f"{grp} ({len(sub)}종)"):
+                        st.dataframe(
+                            sub[["지표명", "값", "단위", "시점"]],
+                            use_container_width=True, hide_index=True,
+                        )
+
+        # -----------------------------------------------------------------
+        # 지표 탐색기 — 100대 지표에 없는 세부 시계열을 직접 찾아 차트로
+        # -----------------------------------------------------------------
+        with sub_explorer:
+            st.markdown("이름으로 통계표를 검색하고, 원하는 항목의 과거 시계열을 바로 차트로 확인합니다.")
+            keyword = st.text_input("통계표 이름 검색 (예: 국고채, 소비자심리, 선행지수, 가계신용)", "")
+
+            if keyword:
+                df_tables = search_ecos_stat_table(keyword)
+                if df_tables.empty:
+                    st.info("검색 결과가 없습니다. 다른 키워드로 시도해보세요.")
+                else:
+                    table_label = df_tables.apply(
+                        lambda r: f"[{r['STAT_CODE']}] {r['STAT_NAME']} ({r['CYCLE']}, {r['ORG_NAME']})", axis=1
+                    )
+                    sel_idx = st.selectbox(
+                        "통계표 선택:", options=range(len(df_tables)),
+                        format_func=lambda i: table_label.iloc[i],
+                    )
+                    stat_code = df_tables.iloc[sel_idx]["STAT_CODE"]
+
+                    df_items = get_ecos_item_list(stat_code)
+                    item_code1 = ""
+                    cycle = df_tables.iloc[sel_idx]["CYCLE"]
+                    if not df_items.empty and "ITEM_CODE" in df_items.columns:
+                        item_label = df_items.apply(
+                            lambda r: f"{r['ITEM_NAME']} ({r.get('START_TIME','')}~{r.get('END_TIME','')})", axis=1
+                        )
+                        item_idx = st.selectbox(
+                            "세부 항목 선택:", options=range(len(df_items)),
+                            format_func=lambda i: item_label.iloc[i],
+                        )
+                        item_code1 = df_items.iloc[item_idx]["ITEM_CODE"]
+                        cycle = df_items.iloc[item_idx].get("CYCLE", cycle)
+
+                    col_d1, col_d2 = st.columns(2)
+                    with col_d1:
+                        start_date = st.date_input("시작일", datetime.date(2015, 1, 1), key="ecos_start")
+                    with col_d2:
+                        end_date = st.date_input("종료일", datetime.date.today(), key="ecos_end")
+
+                    if st.button("조회하기", type="primary"):
+                        start_str = _fmt_ecos_date(start_date, cycle)
+                        end_str = _fmt_ecos_date(end_date, cycle)
+                        df_series = get_ecos_series(stat_code, cycle, start_str, end_str, item_code1)
+
+                        if df_series.empty:
+                            st.warning("조회된 데이터가 없습니다. 기간이나 항목을 다시 확인해주세요.")
+                        else:
+                            latest = df_series.iloc[-1]
+                            unit_val = df_series["UNIT_NAME"].iloc[0] if "UNIT_NAME" in df_series.columns else ""
+                            st.metric(
+                                df_series["STAT_NAME"].iloc[0] if "STAT_NAME" in df_series.columns else stat_code,
+                                f"{latest['DATA_VALUE']:,.2f} {unit_val}",
+                                help=f"시점: {latest['TIME']}",
+                            )
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=df_series["TIME"], y=df_series["DATA_VALUE"],
+                                mode="lines", line=dict(color="#4f46e5", width=2),
+                            ))
+                            fig.update_layout(height=420, margin=dict(l=20, r=20, t=30, b=20))
+                            st.plotly_chart(fig, use_container_width=True)
+                            st.dataframe(df_series[["TIME", "DATA_VALUE"]], use_container_width=True, hide_index=True)
