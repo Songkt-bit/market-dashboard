@@ -348,30 +348,38 @@ def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
 
 
 # ---------------------------------------------------------------------------
-# ECOS 즐겨찾기 (지금 주목 카드에 실제 추이/변화를 보여줄 지표 최대 10개)
+# ECOS 즐겨찾기 (지금 주목에 표시할 지표 최대 10개)
 # ---------------------------------------------------------------------------
-# 100대 지표(KeyStatisticList)는 통계표코드를 안 주기 때문에, 즐겨찾기로 등록한
-# 지표에 한해서만 지표 탐색기와 같은 방식(통계표 검색 → 항목 선택)으로 실제
-# 통계표코드를 한 번 매핑해서 로컬 파일에 저장해둔다. 이 매핑이 있어야만
-# 진짜 과거 시계열(스파크라인·전기대비 변화)을 그릴 수 있다.
-# 로컬 JSON 파일이라 앱을 재배포(깃허브 push → Streamlit Cloud 재빌드)하면
-# 초기화될 수 있다는 점은 감안할 것.
+# 처음엔 즐겨찾기한 지표마다 통계표코드를 직접 매핑해서 우리 차트에 스파크라인을
+# 그리려 했는데, 지표 하나하나 검색→선택→확인하는 과정이 너무 번거로웠음.
+# 대신 한국은행이 이미 만들어둔 '금융·경제 스냅샷'(snapshot.bok.or.kr) 공식
+# 차트로 바로 연결하는 쪽으로 바꿈 — 다만 이 사이트는 완전한 JS 앱이라 지표명으로
+# 특정 차트에 URL 하나로 바로 딥링크하는 공식 방법은 확인되지 않았고, 그래서
+# 지표명을 복사해서 그 사이트 검색창에 붙여넣는 방식으로 감. 이러면 통계표코드를
+# 몰라도 되고, 우리가 관리해야 할 매핑도 없어서 훨씬 가볍고 안정적임.
+# 즐겨찾기 자체는 로컬 JSON 파일에 지표명만 저장 — 앱을 재배포하면 초기화될 수 있음.
 ECOS_FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecos_favorites.json")
 ECOS_FAVORITES_MAX = 10
+ECOS_SNAPSHOT_URL = "https://snapshot.bok.or.kr/bookmark/"
 
 
-def load_ecos_favorites() -> dict:
-    """{지표명: None(매핑 대기중) | {stat_code, item_code1, item_code2, cycle}(매핑 완료)}"""
+def load_ecos_favorites() -> list:
+    """즐겨찾기한 지표명 리스트. (예전 버전엔 통계표코드 매핑 dict를 저장했었는데,
+    그 키만 그대로 가져와서 이름 리스트로 마이그레이션함)"""
     if os.path.exists(ECOS_FAVORITES_FILE):
         try:
             with open(ECOS_FAVORITES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                return list(data.keys())
+            if isinstance(data, list):
+                return data
         except Exception:
-            return {}
-    return {}
+            return []
+    return []
 
 
-def save_ecos_favorites(favs: dict):
+def save_ecos_favorites(favs: list):
     try:
         with open(ECOS_FAVORITES_FILE, "w", encoding="utf-8") as f:
             json.dump(favs, f, ensure_ascii=False, indent=2)
@@ -392,48 +400,6 @@ def guess_ecos_cycle_label(time_str) -> str:
     if len(digits) == 4:
         return "년"
     return "-"
-
-
-@st.cache_data(ttl=3600)
-def get_ecos_favorite_trend(stat_code: str, cycle: str, item_code1: str, item_code2: str, periods: int = 24):
-    """즐겨찾기 매핑을 이용해 최근 시계열을 가져와 (값 리스트, 최신값, 직전값)을 반환"""
-    if not stat_code:
-        return [], None, None
-    end = datetime.date.today()
-    lookback_days = {"D": 90, "M": 365 * 3, "Q": 365 * 8, "A": 365 * 25}.get(cycle, 365 * 3)
-    start = end - datetime.timedelta(days=lookback_days)
-    df = get_ecos_series(
-        stat_code, cycle, _fmt_ecos_date(start, cycle), _fmt_ecos_date(end, cycle),
-        item_code1 or "", item_code2 or "",
-    )
-    if df.empty:
-        return [], None, None
-    df = df.dropna(subset=["DATA_VALUE"]).tail(periods)
-    values = df["DATA_VALUE"].tolist()
-    latest = values[-1] if values else None
-    prev = values[-2] if len(values) >= 2 else None
-    return values, latest, prev
-
-
-def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-    h = hex_color.lstrip('#')
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-
-def render_ecos_sparkline(values: list, color: str):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        y=values, mode="lines", line=dict(color=color, width=1.6),
-        fill="tozeroy", fillcolor=_hex_to_rgba(color, 0.12),
-    ))
-    fig.update_xaxes(visible=False, showgrid=False)
-    fig.update_yaxes(visible=False, showgrid=False)
-    fig.update_layout(
-        height=46, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    )
-    return fig
 
 
 # 4. 탭 화면 구성
@@ -906,87 +872,30 @@ with tab8:
                 favorites = load_ecos_favorites()
 
                 # -----------------------------------------------------
-                # 지금 주목 — 즐겨찾기한 지표만 (최대 10개), 실제 추이/변화 표시
+                # 지금 주목 — 즐겨찾기한 지표만 (최대 10개)
+                # 자체 스파크라인 대신, 한국은행 공식 '금융·경제 스냅샷' 차트로 바로
+                # 연결. 지표명을 복사해서 스냅샷 검색창에 붙여넣으면 공식 차트가 뜸.
                 # -----------------------------------------------------
                 st.markdown(f"#### 지금 주목 · 즐겨찾기 ({len(favorites)}/{ECOS_FAVORITES_MAX})")
-                mapped_favs = [(name, meta) for name, meta in favorites.items() if meta][:ECOS_FAVORITES_MAX]
-                pending_favs = [name for name, meta in favorites.items() if not meta]
-
-                if not mapped_favs and not pending_favs:
+                if not favorites:
                     st.caption("아직 즐겨찾기한 지표가 없습니다. 아래 '그룹별 보기' 표에서 ⭐ 체크박스를 눌러 추가해보세요.")
                 else:
+                    st.caption("지표명을 복사(아이콘 클릭)해서 스냅샷 검색창에 붙여넣으면 한국은행 공식 추이 차트를 볼 수 있어요.")
                     cols_fav = st.columns(5)
-                    for i, (name, meta) in enumerate(mapped_favs):
-                        values, latest, prev = get_ecos_favorite_trend(
-                            meta["stat_code"], meta["cycle"], meta.get("item_code1", ""), meta.get("item_code2", "")
-                        )
+                    for i, name in enumerate(favorites[:ECOS_FAVORITES_MAX]):
                         row_match = df_key[df_key["지표명"] == name]
-                        unit = row_match.iloc[0]["단위"] if not row_match.empty else ""
-                        display_val = latest if latest is not None else (row_match.iloc[0]["값"] if not row_match.empty else None)
                         with cols_fav[i % 5]:
                             st.caption(name)
-                            st.markdown(f"**{display_val:,.2f}** {unit}" if display_val is not None else "**—**")
-                            if latest is not None and prev is not None:
-                                diff = latest - prev
-                                is_pct_unit = "%" in str(unit)
-                                pct_change = (diff / prev * 100) if prev else 0
-                                delta_str = f"{diff:+.2f}%p" if is_pct_unit else f"{diff:+,.2f} ({pct_change:+.2f}%)"
-                                d_color = "#dc2626" if diff > 0 else ("#2563eb" if diff < 0 else "#6b7280")
-                                st.markdown(f"<span style='color:{d_color}; font-size:12px;'>{delta_str}</span>", unsafe_allow_html=True)
-                            if len(values) >= 2:
-                                spark_color = "#dc2626" if (prev is not None and latest is not None and latest >= prev) else "#2563eb"
-                                st.plotly_chart(
-                                    render_ecos_sparkline(values, spark_color),
-                                    use_container_width=True, config={"displayModeBar": False}, key=f"ecos_spark_{name}",
-                                )
+                            if not row_match.empty:
+                                r0 = row_match.iloc[0]
+                                st.markdown(f"**{r0['값']:,.2f}** {r0['단위']}")
+                                st.caption(f"기준 {r0['시점']}")
+                            else:
+                                st.markdown("**—**")
+                            st.code(name, language=None)
+                            st.link_button("🔗 스냅샷에서 보기", ECOS_SNAPSHOT_URL, use_container_width=True)
                             if st.button("즐겨찾기 해제", key=f"ecos_unfav_{name}", use_container_width=True):
-                                favorites.pop(name, None)
-                                save_ecos_favorites(favorites)
-                                st.rerun()
-
-                    if pending_favs:
-                        st.caption(f"⌛ 매핑 대기 중: {', '.join(pending_favs)} — 아래 '즐겨찾기 통계표 연결'에서 이어서 진행해주세요.")
-
-                # -----------------------------------------------------
-                # 매핑 대기 중인 즐겨찾기를 실제 통계표코드에 연결
-                # -----------------------------------------------------
-                if pending_favs:
-                    st.divider()
-                    st.markdown("#### 🔧 즐겨찾기 통계표 연결")
-                    target_name = st.selectbox("연결할 지표:", options=pending_favs, key="ecos_fav_map_target")
-                    default_kw = target_name.split("(")[0].strip()
-                    map_keyword = st.text_input("통계표 검색어:", value=default_kw, key="ecos_fav_map_kw")
-                    if map_keyword:
-                        df_tables_m = search_ecos_stat_table(map_keyword)
-                        if df_tables_m.empty:
-                            st.info("검색 결과가 없습니다. 검색어를 바꿔보세요.")
-                        else:
-                            label_m = df_tables_m.apply(
-                                lambda r: f"[{r['STAT_CODE']}] {r['STAT_NAME']} ({r['CYCLE']}, {r['ORG_NAME']})", axis=1
-                            )
-                            sel_m = st.selectbox(
-                                "통계표 선택:", options=range(len(df_tables_m)),
-                                format_func=lambda i: label_m.iloc[i], key="ecos_fav_map_table",
-                            )
-                            stat_code_m = df_tables_m.iloc[sel_m]["STAT_CODE"]
-                            cycle_m = df_tables_m.iloc[sel_m]["CYCLE"]
-                            item_code1_m, item_code2_m = "", ""
-                            df_items_m = get_ecos_item_list(stat_code_m)
-                            if not df_items_m.empty and "ITEM_CODE" in df_items_m.columns:
-                                item_label_m = df_items_m.apply(
-                                    lambda r: f"{r['ITEM_NAME']} ({r.get('START_TIME','')}~{r.get('END_TIME','')})", axis=1
-                                )
-                                item_idx_m = st.selectbox(
-                                    "세부 항목 선택:", options=range(len(df_items_m)),
-                                    format_func=lambda i: item_label_m.iloc[i], key="ecos_fav_map_item",
-                                )
-                                item_code1_m = df_items_m.iloc[item_idx_m]["ITEM_CODE"]
-                                cycle_m = df_items_m.iloc[item_idx_m].get("CYCLE", cycle_m)
-                            if st.button("이 통계표로 연결하기", type="primary", key="ecos_fav_map_confirm"):
-                                favorites[target_name] = {
-                                    "stat_code": stat_code_m, "item_code1": item_code1_m,
-                                    "item_code2": item_code2_m, "cycle": cycle_m,
-                                }
+                                favorites.remove(name)
                                 save_ecos_favorites(favorites)
                                 st.rerun()
 
@@ -994,42 +903,22 @@ with tab8:
                 st.markdown("#### 그룹별 보기")
                 for grp, sub in df_key.groupby("그룹"):
                     with st.expander(f"{grp} ({len(sub)}종)"):
-                        rows = []
-                        for _, r in sub.iterrows():
-                            name = r["지표명"]
-                            meta = favorites.get(name)
-                            trend_vals = []
-                            change_str = "—"
-                            if meta:
-                                values, latest, prev = get_ecos_favorite_trend(
-                                    meta["stat_code"], meta["cycle"], meta.get("item_code1", ""), meta.get("item_code2", "")
-                                )
-                                trend_vals = values
-                                if latest is not None and prev is not None:
-                                    diff = latest - prev
-                                    is_pct_unit = "%" in str(r["단위"])
-                                    pct_change = (diff / prev * 100) if prev else 0
-                                    change_str = f"{diff:+.2f}%p" if is_pct_unit else f"{diff:+,.2f} ({pct_change:+.2f}%)"
-                            rows.append({
-                                "즐겨찾기": name in favorites,
-                                "지표": name,
-                                "추이": trend_vals,
-                                "최신값": r["값"],
-                                "단위": r["단위"],
-                                "변화": change_str,
-                                "기준시점": r["시점"],
-                                "주기": guess_ecos_cycle_label(r["시점"]),
-                            })
-                        disp_df = pd.DataFrame(rows)
+                        disp_df = pd.DataFrame({
+                            "즐겨찾기": [name in favorites for name in sub["지표명"]],
+                            "지표": sub["지표명"],
+                            "최신값": sub["값"],
+                            "단위": sub["단위"],
+                            "기준시점": sub["시점"],
+                            "주기": [guess_ecos_cycle_label(t) for t in sub["시점"]],
+                        })
 
                         edited = st.data_editor(
                             disp_df,
                             column_config={
                                 "즐겨찾기": st.column_config.CheckboxColumn("⭐"),
-                                "추이": st.column_config.LineChartColumn("추이", width="small"),
                                 "최신값": st.column_config.NumberColumn("최신값", format="%.2f"),
                             },
-                            disabled=["지표", "추이", "최신값", "단위", "변화", "기준시점", "주기"],
+                            disabled=["지표", "최신값", "단위", "기준시점", "주기"],
                             hide_index=True, use_container_width=True, key=f"ecos_group_{grp}",
                         )
 
@@ -1042,10 +931,10 @@ with tab8:
                                 if len(favorites) >= ECOS_FAVORITES_MAX:
                                     st.warning(f"즐겨찾기는 최대 {ECOS_FAVORITES_MAX}개까지예요. 먼저 하나를 해제해주세요.")
                                 else:
-                                    favorites[name] = None  # 매핑 대기 상태로 우선 추가
+                                    favorites.append(name)
                                     changed = True
                             elif not now_fav and was_fav:
-                                favorites.pop(name, None)
+                                favorites.remove(name)
                                 changed = True
                         if changed:
                             save_ecos_favorites(favorites)
