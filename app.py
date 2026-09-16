@@ -9,6 +9,14 @@ import io
 import json
 import os
 
+# pykrx는 코스피 종목 리스트/시세 조회(Page 10)에만 필요한 선택적 의존성입니다.
+# requirements.txt에 pykrx가 없으면 여기서 조용히 꺼두고, 해당 탭에서만 안내 메시지를 띄웁니다.
+try:
+    from pykrx import stock as pykrx_stock
+    PYKRX_AVAILABLE = True
+except ImportError:
+    PYKRX_AVAILABLE = False
+
 # 1. 웹페이지 기본 설정
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
 st.title("📊 Daily Market & Macro Dashboard")
@@ -561,12 +569,180 @@ def _fng_panel_row(label: str, value):
     </div>"""
 
 
+# ---------------------------------------------------------------------------
+# 홈 화면 메모장 (생각날 때마다 하나씩 적어두는 용도)
+# ---------------------------------------------------------------------------
+# ECOS 즐겨찾기와 같은 방식으로 로컬 JSON 파일에 저장합니다. 앱이 켜져 있는 동안은
+# 유지되지만, Streamlit Cloud는 코드를 새로 배포하면 파일시스템이 초기화되니
+# 오래 보관해야 할 메모는 가끔 내용을 따로 복사해두는 걸 권장합니다.
+MEMO_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "home_memos.json")
+
+
+def load_memos() -> list:
+    if os.path.exists(MEMO_FILE):
+        try:
+            with open(MEMO_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            return []
+    return []
+
+
+def save_memos(memos: list):
+    try:
+        with open(MEMO_FILE, "w", encoding="utf-8") as f:
+            json.dump(memos, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ===========================================================================
+# Page 10: 50일 이동평균선 상회 종목 비율 (Market Breadth)
+# ===========================================================================
+# "전체 종목 중 종가가 50일 이동평균선 위에 있는 종목의 비율" — 시장 과매수/과매도를
+# 가늠하는 대표적인 breadth(시장 호흡) 지표입니다 (스크린샷의 $NYA50R과 같은 개념).
+# - S&P500: 위키피디아의 현재 편입종목 리스트 + yfinance 일괄 다운로드로 계산
+# - 코스피: pykrx로 코스피200 구성종목 시세를 받아 계산 (전체 코스피보다 가벼움)
+# * "현재" 편입종목 리스트를 과거 전체 기간에 그대로 적용하기 때문에 생존편향
+#   (survivorship bias)이 있는 단순화된 지표입니다 — 실무에서도 보통 감안하고 씁니다.
+# * 500~200개 종목 x 수년치 일별 데이터를 받아오는 작업이라 최초 로딩이 오래 걸릴 수
+#   있어서(수십 초~수 분) 하루 단위(ttl=86400)로 캐싱하고, 조회 기간은 최대 10년으로
+#   제한해 최초 백필 비용을 억제합니다.
+BREADTH_MAX_YEARS = 10
+BREADTH_SMA_WINDOW = 50
+
+
+@st.cache_data(ttl=86400)
+def get_sp500_tickers() -> list:
+    """위키피디아 S&P500 편입종목 리스트. 야후 파이낸스 형식에 맞춰 '.'을 '-'로 치환(예: BRK.B -> BRK-B)."""
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        df = tables[0]
+        tickers = df["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
+        return sorted(set(tickers))
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=86400)
+def get_kospi200_tickers() -> list:
+    """코스피200 구성종목 코드 리스트 (pykrx, 6자리 코드)."""
+    if not PYKRX_AVAILABLE:
+        return []
+    for date_arg in (datetime.date.today().strftime("%Y%m%d"), None):
+        try:
+            codes = pykrx_stock.get_index_portfolio_deposit_file("1028", date_arg) if date_arg \
+                else pykrx_stock.get_index_portfolio_deposit_file("1028")
+            if codes:
+                return sorted(set(codes))
+        except Exception:
+            continue
+    return []
+
+
+@st.cache_data(ttl=86400, show_spinner="S&P500 약 500개 종목 데이터를 불러오는 중입니다 (최초 로딩은 1~2분 정도 걸릴 수 있어요)...")
+def get_sp500_breadth_data(years: int = BREADTH_MAX_YEARS):
+    """
+    S&P500 종목별 종가를 받아 50일선 상회 비율(%)의 일별 시계열을 계산합니다.
+    반환: (breadth_series, coverage_dict)  coverage_dict = {"ok": 성공 종목 수, "total": 전체 종목 수}
+    """
+    tickers = get_sp500_tickers()
+    if not tickers:
+        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+
+    start = datetime.date.today() - datetime.timedelta(days=365 * years + 90)
+    try:
+        raw = yf.download(tickers, start=start.strftime("%Y-%m-%d"), progress=False,
+                           group_by="ticker", threads=True)
+    except Exception:
+        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers)}
+
+    above_frames = []
+    ok = 0
+    for t in tickers:
+        try:
+            close = raw[t]["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw["Close"]
+        except Exception:
+            continue
+        close = close.dropna()
+        if len(close) < BREADTH_SMA_WINDOW + 5:
+            continue
+        sma50 = close.rolling(BREADTH_SMA_WINDOW).mean()
+        # sma50이 NaN인 구간(워밍업 기간)은 "50일선 아래"가 아니라 "판단 불가"이므로
+        # False가 아닌 NaN으로 남겨서 평균 계산(skipna) 시 그 날짜의 분모에서 빠지게 함
+        above = (close > sma50).where(sma50.notna())
+        above_frames.append(above.rename(t))
+        ok += 1
+
+    if not above_frames:
+        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers)}
+
+    above_df = pd.concat(above_frames, axis=1)
+    breadth = (above_df.mean(axis=1, skipna=True) * 100).dropna()
+    breadth.index = pd.to_datetime(breadth.index)
+    return breadth, {"ok": ok, "total": len(tickers)}
+
+
+@st.cache_data(ttl=86400, show_spinner="코스피200 종목 데이터를 불러오는 중입니다 (최초 로딩은 몇 분 정도 걸릴 수 있어요)...")
+def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
+    """코스피200 종목별 종가를 pykrx로 받아 50일선 상회 비율(%)의 일별 시계열을 계산합니다."""
+    if not PYKRX_AVAILABLE:
+        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+
+    codes = get_kospi200_tickers()
+    if not codes:
+        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+
+    start = datetime.date.today() - datetime.timedelta(days=365 * years + 90)
+    start_str = start.strftime("%Y%m%d")
+    end_str = datetime.date.today().strftime("%Y%m%d")
+
+    above_frames = []
+    ok = 0
+    for code in codes:
+        try:
+            df = pykrx_stock.get_market_ohlcv(start_str, end_str, code)
+        except Exception:
+            continue
+        if df is None or df.empty or "종가" not in df.columns:
+            continue
+        close = df["종가"].astype(float)
+        close = close[close > 0].dropna()
+        if len(close) < BREADTH_SMA_WINDOW + 5:
+            continue
+        sma50 = close.rolling(BREADTH_SMA_WINDOW).mean()
+        above = (close > sma50).where(sma50.notna())
+        above_frames.append(above.rename(code))
+        ok += 1
+
+    if not above_frames:
+        return pd.Series(dtype=float), {"ok": 0, "total": len(codes)}
+
+    above_df = pd.concat(above_frames, axis=1)
+    breadth = (above_df.mean(axis=1, skipna=True) * 100).dropna()
+    breadth.index = pd.to_datetime(breadth.index)
+    return breadth, {"ok": ok, "total": len(codes)}
+
+
+@st.cache_data(ttl=3600)
+def get_single_index_close(ticker: str, start_date_str: str):
+    """오버레이용 단일 지수 종가 (S&P500/코스피 자체 지수)"""
+    df = yf.download(ticker, start=start_date_str, progress=False)
+    if df.empty:
+        return pd.Series(dtype=float)
+    close = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
+    return close.iloc[:, 0]
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
-    "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수"
+    "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
+    "📶 Page 10: 이평선 상회 비율"
 ])
 
 # ==========================================
@@ -636,6 +812,41 @@ with tab_home:
 </style>
 <div class="heatmap-container">{html_table}</div>"""
         st.markdown(final_custom_css, unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("📝 메모장")
+    st.caption("생각날 때마다 가볍게 적어두는 공간입니다. (서버가 재배포되면 초기화될 수 있어요)")
+
+    memos = load_memos()
+
+    with st.form("memo_add_form", clear_on_submit=True):
+        new_memo = st.text_area(
+            "새 메모", placeholder="예: D램 가격 페이지에 낸드도 추가하기",
+            height=80, label_visibility="collapsed"
+        )
+        submitted = st.form_submit_button("➕ 메모 추가")
+        if submitted and new_memo.strip():
+            memos.insert(0, {
+                "text": new_memo.strip(),
+                "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            })
+            save_memos(memos)
+            st.rerun()
+
+    if not memos:
+        st.caption("아직 메모가 없습니다. 위에 적고 '메모 추가'를 눌러보세요.")
+    else:
+        for i, memo in enumerate(memos):
+            with st.container(border=True):
+                col_txt, col_del = st.columns([10, 1])
+                with col_txt:
+                    st.caption(memo.get("created_at", ""))
+                    st.text(memo.get("text", ""))
+                with col_del:
+                    if st.button("🗑️", key=f"memo_del_{i}", help="삭제"):
+                        memos.pop(i)
+                        save_memos(memos)
+                        st.rerun()
 
 # ==========================================
 # [Page 1] 주가지수 화면
@@ -1287,3 +1498,80 @@ with tab9:
                     "CSV로 다운로드", data=csv_bytes,
                     file_name="cnn_fear_greed_history.csv", mime="text/csv"
                 )
+
+# ==========================================
+# [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
+# ==========================================
+with tab10:
+    st.subheader("📶 50일 이동평균선 상회 종목 비율 — 시장 호흡(Breadth) 지표")
+    st.caption(
+        "전체 종목 중 종가가 50일 이동평균선 위에 있는 종목의 비율(%)입니다. 통상 30% 아래로 "
+        "떨어지면 시장이 과매도 국면에 가깝고, 70~80% 이상이면 과매수 국면으로 해석합니다. "
+        "S&P500은 위키피디아 편입종목 + yfinance, 코스피는 코스피200 구성종목 + pykrx로 계산합니다."
+    )
+    st.caption(
+        "⚠️ '현재' 편입종목 리스트를 과거 전체 기간에 그대로 적용하는 방식이라 생존편향이 있는 "
+        "단순화된 지표입니다. 또한 종목 수가 많아 최초 로딩이 오래 걸릴 수 있어 하루 단위로 캐싱됩니다."
+    )
+
+    if not PYKRX_AVAILABLE:
+        st.warning(
+            "코스피 데이터를 받아오려면 `pykrx` 패키지가 필요합니다. requirements.txt에 "
+            "`pykrx`를 추가하고 재배포해주세요. (S&P500은 pykrx 없이도 조회됩니다.)"
+        )
+
+    period_option_10 = st.radio(
+        "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "YTD"],
+        index=0, horizontal=True, key="breadth_p10"
+    )
+    start_date_10 = get_start_date(period_option_10)
+
+    sp500_breadth, sp500_cov = get_sp500_breadth_data()
+    if PYKRX_AVAILABLE:
+        kospi_breadth, kospi_cov = get_kospi200_breadth_data()
+    else:
+        kospi_breadth, kospi_cov = pd.Series(dtype=float), {"ok": 0, "total": 0}
+
+    def _render_breadth_chart(col, title, breadth_series, coverage, index_ticker, line_color):
+        with col:
+            if breadth_series.empty:
+                st.warning(f"{title} 데이터를 불러오지 못했습니다.")
+                return
+            plot_series = breadth_series[breadth_series.index >= pd.to_datetime(start_date_10)]
+            if plot_series.empty:
+                st.warning(f"{title}: 선택한 기간에 해당하는 데이터가 없습니다.")
+                return
+
+            latest_val = plot_series.iloc[-1]
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_trace(go.Scatter(
+                x=plot_series.index, y=plot_series.values, name="50일선 상회 비율(%)",
+                line=dict(color=line_color, width=1.8)
+            ), secondary_y=False)
+            fig.add_hline(y=30, line_dash="dot", line_color="gray", opacity=0.6, secondary_y=False)
+            fig.add_hline(y=70, line_dash="dot", line_color="gray", opacity=0.6, secondary_y=False)
+
+            idx_close = get_single_index_close(index_ticker, start_date_10.strftime("%Y-%m-%d"))
+            if len(idx_close) > 0:
+                fig.add_trace(go.Scatter(
+                    x=idx_close.index, y=idx_close.values, name="지수(우)",
+                    line=dict(color="black", width=1.3)
+                ), secondary_y=True)
+            fig.update_yaxes(title_text="지수", secondary_y=True)
+
+            fig.update_layout(
+                title=f"<b>{title}</b> ({coverage['ok']}/{coverage['total']}종목 반영) | 현재: {latest_val:.1f}%",
+                height=420, margin=dict(l=20, r=20, t=50, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+            )
+            fig.update_yaxes(title_text="50일선 상회 비율 (%)", range=[0, 100], secondary_y=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("현재", f"{latest_val:.1f}%")
+            col_m2.metric("선택 구간 최저", f"{plot_series.min():.1f}%")
+            col_m3.metric("선택 구간 최고", f"{plot_series.max():.1f}%")
+
+    col10a, col10b = st.columns(2)
+    _render_breadth_chart(col10a, "S&P 500", sp500_breadth, sp500_cov, "^GSPC", "#1f77b4")
+    _render_breadth_chart(col10b, "코스피 200", kospi_breadth, kospi_cov, "^KS11", "#c0392b")
