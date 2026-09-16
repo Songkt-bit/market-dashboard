@@ -402,12 +402,138 @@ def guess_ecos_cycle_label(time_str) -> str:
     return "-"
 
 
+# ===========================================================================
+# CNN Fear & Greed Index 연동 함수
+# ===========================================================================
+# CNN이 공식적으로 공개한 API는 아니고, cnn.com/markets/fear-and-greed 페이지가
+# 내부적으로 호출하는 엔드포인트를 그대로 쓰는 방식입니다. (다수의 오픈소스
+# 트래커/패키지가 동일하게 사용 중인, 잘 알려진 방식이지만 CNN이 구조를 바꾸면
+# 예고 없이 깨질 수 있다는 점은 감안해주세요.)
+#
+# 이 엔드포인트는 현재 스코어뿐 아니라 "전일/1주일 전/1개월 전/1년 전" 값과
+# 2011년부터의 일별 히스토리를 한 번에 돌려주기 때문에, 우리가 매일 따로
+# 값을 수집/저장하지 않아도 히스토리 추적이 가능합니다.
+FNG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+FNG_EARLIEST_DATE = "2011-01-03"  # CNN이 제공하는 히스토리 시작 시점
+
+FNG_RATING_KR = {
+    "extreme fear": "극단적 공포", "fear": "공포", "neutral": "중립",
+    "greed": "탐욕", "extreme greed": "극단적 탐욕",
+}
+FNG_RATING_COLOR = {
+    "extreme fear": "#b23b3b", "fear": "#e07b39", "neutral": "#e8c547",
+    "greed": "#93c47d", "extreme greed": "#3f9142",
+}
+
+
+def _fng_score_to_rating(score):
+    """previous_close 등에는 등급 문자열이 따로 없어서, 점수 구간으로 역산"""
+    if score is None or pd.isna(score):
+        return None, "#999"
+    if score < 25: return "extreme fear", FNG_RATING_COLOR["extreme fear"]
+    if score < 45: return "fear", FNG_RATING_COLOR["fear"]
+    if score < 55: return "neutral", FNG_RATING_COLOR["neutral"]
+    if score < 75: return "greed", FNG_RATING_COLOR["greed"]
+    return "extreme greed", FNG_RATING_COLOR["extreme greed"]
+
+
+@st.cache_data(ttl=3600)
+def get_fear_greed_data(start_date_str: str = FNG_EARLIEST_DATE):
+    """
+    CNN Fear & Greed Index 현재값 + 일별 히스토리를 가져옵니다.
+    반환값: (current_dict, history_df, error_message)
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.cnn.com/markets/fear-and-greed",
+        "Origin": "https://www.cnn.com",
+    }
+
+    # 날짜를 붙인 경로가 막히는 배포 환경이 가끔 있어서, 실패하면 날짜 없는
+    # 기본 경로로 한 번 더 시도합니다.
+    urls_to_try = [f"{FNG_URL}/{start_date_str}", FNG_URL]
+    data, last_err = None, None
+    for url in urls_to_try:
+        try:
+            res = requests.get(url, headers=headers, timeout=15)
+            res.raise_for_status()
+            data = res.json()
+            break
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    if data is None:
+        return None, pd.DataFrame(), last_err
+
+    current = data.get("fear_and_greed", {}) or {}
+
+    hist_raw = (data.get("fear_and_greed_historical", {}) or {}).get("data", [])
+    if not hist_raw:
+        return current, pd.DataFrame(), None
+
+    df_hist = pd.DataFrame(hist_raw).rename(columns={"x": "Timestamp", "y": "Score", "rating": "Rating"})
+    df_hist["Date"] = pd.to_datetime(df_hist["Timestamp"], unit="ms")
+    df_hist = df_hist[["Date", "Score", "Rating"]].dropna(subset=["Score"]).sort_values("Date")
+    df_hist = df_hist.set_index("Date")
+    return current, df_hist, None
+
+
+def render_fng_gauge(score: float):
+    """CNN 사이트의 반원형 게이지를 Plotly Indicator로 재현"""
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        number={'font': {'size': 44}, 'valueformat': '.0f'},
+        gauge={
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickvals': [0, 25, 45, 55, 75, 100]},
+            'bar': {'color': "rgba(0,0,0,0)"},
+            'bgcolor': "white",
+            'borderwidth': 0,
+            'steps': [
+                {'range': [0, 25], 'color': FNG_RATING_COLOR["extreme fear"]},
+                {'range': [25, 45], 'color': FNG_RATING_COLOR["fear"]},
+                {'range': [45, 55], 'color': FNG_RATING_COLOR["neutral"]},
+                {'range': [55, 75], 'color': FNG_RATING_COLOR["greed"]},
+                {'range': [75, 100], 'color': FNG_RATING_COLOR["extreme greed"]},
+            ],
+            'threshold': {'line': {'color': "black", 'width': 5}, 'thickness': 0.85, 'value': score}
+        }
+    ))
+    fig.update_layout(height=300, margin=dict(l=30, r=30, t=30, b=10))
+    return fig
+
+
+def _fng_panel_row(label: str, value):
+    """오른쪽 패널의 '전일 종가 / 1주일 전 / 1개월 전 / 1년 전' 한 줄"""
+    if value is None or pd.isna(value):
+        return f"""<div style="display:flex; justify-content:space-between; padding:10px 0;
+                    border-bottom:1px solid #eee; color:#aaa;">
+                    <span>{label}</span><span>N/A</span></div>"""
+    rating, color = _fng_score_to_rating(value)
+    rating_kr = FNG_RATING_KR.get(rating, rating or "-")
+    return f"""
+    <div style="display:flex; justify-content:space-between; align-items:center;
+                padding:10px 0; border-bottom:1px solid #eee;">
+        <span style="color:#666; font-size:14px;">{label}</span>
+        <span style="display:flex; align-items:center; gap:8px;">
+            <span style="color:{color}; font-weight:600; font-size:14px;">{rating_kr}</span>
+            <span style="background:{color}; color:white; border-radius:50%;
+                         display:inline-block; width:30px; height:30px; line-height:30px;
+                         text-align:center; font-weight:700; font-size:13px;">{value:.0f}</span>
+        </span>
+    </div>"""
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
-    "🏦 Page 8: ECOS 매크로 지표"
+    "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수"
 ])
 
 # ==========================================
@@ -1004,3 +1130,119 @@ with tab8:
                             fig.update_layout(height=420, margin=dict(l=20, r=20, t=30, b=20))
                             st.plotly_chart(fig, use_container_width=True)
                             st.dataframe(df_series[["TIME", "DATA_VALUE"]], use_container_width=True, hide_index=True)
+
+# ==========================================
+# [Page 9] CNN Fear & Greed Index
+# ==========================================
+with tab9:
+    st.subheader("😨 CNN Fear & Greed Index")
+    st.caption(
+        "CNN이 7개 하위 지표(시장 모멘텀, 변동성(VIX), 풋/콜 옵션 비율, 정크본드 수요, "
+        "안전자산 수요, 주가 강도/폭 등)를 합성해 매일 발표하는 시장 심리 지수입니다. "
+        "0에 가까울수록 극단적 공포(Extreme Fear), 100에 가까울수록 극단적 탐욕(Extreme Greed)을 의미합니다."
+    )
+
+    current, df_fng_hist, fng_err = get_fear_greed_data()
+
+    if fng_err or not current or current.get("score") is None:
+        st.error(f"CNN Fear & Greed 데이터를 불러오지 못했습니다: {fng_err or '알 수 없는 오류'}")
+        st.caption("CNN이 페이지 구조를 바꿨거나, 네트워크에서 해당 주소로의 접근이 막혀 있을 수 있습니다.")
+    else:
+        score = current.get("score")
+        rating_raw = (current.get("rating") or "").lower()
+        if not rating_raw:
+            rating_raw, _ = _fng_score_to_rating(score)
+        rating_kr = FNG_RATING_KR.get(rating_raw, rating_raw)
+        rating_color = FNG_RATING_COLOR.get(rating_raw, "#333")
+
+        col_gauge, col_panel = st.columns([1.3, 1])
+
+        with col_gauge:
+            st.plotly_chart(render_fng_gauge(score), use_container_width=True)
+            st.markdown(
+                f"<div style='text-align:center; margin-top:-15px;'>"
+                f"<span style='font-size:22px; font-weight:700; color:{rating_color};'>{rating_kr.upper()}</span>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            ts = current.get("timestamp")
+            if ts:
+                try:
+                    ts_fmt = pd.to_datetime(ts).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    ts_fmt = str(ts)
+                st.caption(f"마지막 업데이트: {ts_fmt} (UTC)")
+
+        with col_panel:
+            st.markdown("<div style='padding-top:10px;'>", unsafe_allow_html=True)
+            st.markdown(_fng_panel_row("전일 종가 (Previous close)", current.get("previous_close")), unsafe_allow_html=True)
+            st.markdown(_fng_panel_row("1주일 전 (1 week ago)", current.get("previous_1_week")), unsafe_allow_html=True)
+            st.markdown(_fng_panel_row("1개월 전 (1 month ago)", current.get("previous_1_month")), unsafe_allow_html=True)
+            st.markdown(_fng_panel_row("1년 전 (1 year ago)", current.get("previous_1_year")), unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.divider()
+
+        # ---- 일별 추이 히스토리 ----
+        st.markdown("### 📈 일별 Fear & Greed 추이")
+        if df_fng_hist.empty:
+            st.warning("과거 히스토리 데이터를 불러오지 못했습니다.")
+        else:
+            col_p9, col_o9 = st.columns([3, 1])
+            with col_p9:
+                period_option_9 = st.radio(
+                    "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "Max", "YTD"],
+                    index=0, horizontal=True, key="fng_p9"
+                )
+            with col_o9:
+                show_kospi_9 = st.checkbox("코스피와 함께 보기", value=False, key="fng_kospi_overlay")
+
+            start_date_9 = get_start_date(period_option_9)
+            df_plot9 = df_fng_hist[df_fng_hist.index >= pd.to_datetime(start_date_9)]
+
+            fig9 = make_subplots(specs=[[{"secondary_y": True}]])
+            fig9.add_trace(
+                go.Scatter(x=df_plot9.index, y=df_plot9['Score'], name="Fear & Greed",
+                           line=dict(color="#4f46e5", width=1.6)),
+                secondary_y=False
+            )
+            # 극단적 공포 / 극단적 탐욕 구간 배경 음영
+            fig9.add_hrect(y0=0, y1=25, fillcolor="rgba(178,59,59,0.10)", line_width=0)
+            fig9.add_hrect(y0=75, y1=100, fillcolor="rgba(63,145,66,0.10)", line_width=0)
+
+            if show_kospi_9:
+                df_kospi9 = yf.download("^KS11", start=start_date_9.strftime("%Y-%m-%d"), progress=False)
+                if not df_kospi9.empty:
+                    kclose9 = df_kospi9['Close'] if isinstance(df_kospi9.columns, pd.MultiIndex) else df_kospi9[['Close']]
+                    kclose9 = kclose9.iloc[:, 0]
+                    fig9.add_trace(
+                        go.Scatter(x=kclose9.index, y=kclose9.values, name="코스피",
+                                   line=dict(color="black", width=1.3)),
+                        secondary_y=True
+                    )
+                fig9.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
+
+            fig9.update_layout(
+                height=450, margin=dict(l=20, r=20, t=30, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+            )
+            fig9.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=False)
+            st.plotly_chart(fig9, use_container_width=True)
+
+            # 선택 구간 요약 통계 (투자 참고용)
+            if len(df_plot9) > 0:
+                col_a9, col_b9, col_c9, col_d9 = st.columns(4)
+                col_a9.metric("선택 구간 평균", f"{df_plot9['Score'].mean():.1f}")
+                col_b9.metric("선택 구간 최저", f"{df_plot9['Score'].min():.1f}")
+                col_c9.metric("선택 구간 최고", f"{df_plot9['Score'].max():.1f}")
+                extreme_fear_days = int((df_plot9['Score'] < 25).sum())
+                extreme_fear_pct = extreme_fear_days / len(df_plot9) * 100
+                col_d9.metric("극단적 공포 일수", f"{extreme_fear_days}일 ({extreme_fear_pct:.1f}%)")
+
+            with st.expander("일별 원본 데이터 보기 (CSV 다운로드)"):
+                st.dataframe(df_fng_hist.sort_index(ascending=False), use_container_width=True)
+                csv_bytes = df_fng_hist.to_csv().encode("utf-8-sig")
+                st.download_button(
+                    "CSV로 다운로드", data=csv_bytes,
+                    file_name="cnn_fear_greed_history.csv", mime="text/csv"
+                )
