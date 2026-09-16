@@ -437,11 +437,27 @@ def _fng_score_to_rating(score):
     return "extreme greed", FNG_RATING_COLOR["extreme greed"]
 
 
+FNG_CHUNK_YEARS = 3  # 한 번의 호출에 너무 오래된 시작일(예: 2011년)을 넣으면 CNN이
+# 조용히 실패하거나 최근 구간만 담아 응답하는 것으로 보여서(다른 오픈소스 트래커들은
+# 4년 안팎의 단일 호출은 문제없이 받아온다고 보고함), 그보다 짧게 몇 년 단위로 나눠
+# 여러 번 호출한 뒤 하나로 합치는 방식으로 커버리지를 최대한 확보합니다.
+
+
+def _fng_fetch_one(url: str, headers: dict):
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        res.raise_for_status()
+        return res.json(), None
+    except Exception as e:
+        return None, str(e)
+
+
 @st.cache_data(ttl=3600)
-def get_fear_greed_data(start_date_str: str = FNG_EARLIEST_DATE):
+def get_fear_greed_data(earliest_date_str: str = FNG_EARLIEST_DATE):
     """
     CNN Fear & Greed Index 현재값 + 일별 히스토리를 가져옵니다.
-    반환값: (current_dict, history_df, error_message)
+    반환값: (current_dict, history_df, diagnostics_dict)
+    diagnostics_dict = {"error": str|None, "chunks_ok": int, "chunks_total": int}
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -452,34 +468,51 @@ def get_fear_greed_data(start_date_str: str = FNG_EARLIEST_DATE):
         "Origin": "https://www.cnn.com",
     }
 
-    # 날짜를 붙인 경로가 막히는 배포 환경이 가끔 있어서, 실패하면 날짜 없는
-    # 기본 경로로 한 번 더 시도합니다.
-    urls_to_try = [f"{FNG_URL}/{start_date_str}", FNG_URL]
-    data, last_err = None, None
-    for url in urls_to_try:
-        try:
-            res = requests.get(url, headers=headers, timeout=15)
-            res.raise_for_status()
-            data = res.json()
-            break
-        except Exception as e:
-            last_err = str(e)
+    today = datetime.date.today()
+    earliest = datetime.date.fromisoformat(earliest_date_str)
+
+    # earliest_date_str부터 오늘까지 FNG_CHUNK_YEARS 단위로 시작일을 잘라 목록 생성
+    chunk_starts = []
+    cursor = earliest
+    while cursor < today:
+        chunk_starts.append(cursor)
+        cursor = cursor + datetime.timedelta(days=365 * FNG_CHUNK_YEARS)
+    # 날짜 없이 호출하는 기본 경로도 마지막에 하나 추가 — 가장 최신 값/최근 데이터를 보장
+    urls = [f"{FNG_URL}/{d.strftime('%Y-%m-%d')}" for d in chunk_starts] + [FNG_URL]
+
+    all_points = []
+    current = {}
+    chunks_ok = 0
+    last_err = None
+
+    for url in urls:
+        payload, err = _fng_fetch_one(url, headers)
+        if payload is None:
+            last_err = err
             continue
+        chunks_ok += 1
+        # 매 호출의 fear_and_greed(현재값)는 항상 "오늘" 기준값이라, 성공한 것 중
+        # 가장 마지막(=가장 최신 구간) 응답 값으로 덮어써도 무방합니다.
+        if payload.get("fear_and_greed"):
+            current = payload["fear_and_greed"]
+        pts = (payload.get("fear_and_greed_historical", {}) or {}).get("data", [])
+        all_points.extend(pts)
 
-    if data is None:
-        return None, pd.DataFrame(), last_err
+    diagnostics = {
+        "error": None if chunks_ok else last_err,
+        "chunks_ok": chunks_ok,
+        "chunks_total": len(urls),
+    }
 
-    current = data.get("fear_and_greed", {}) or {}
+    if not all_points:
+        return (current or None), pd.DataFrame(), diagnostics
 
-    hist_raw = (data.get("fear_and_greed_historical", {}) or {}).get("data", [])
-    if not hist_raw:
-        return current, pd.DataFrame(), None
-
-    df_hist = pd.DataFrame(hist_raw).rename(columns={"x": "Timestamp", "y": "Score", "rating": "Rating"})
-    df_hist["Date"] = pd.to_datetime(df_hist["Timestamp"], unit="ms")
-    df_hist = df_hist[["Date", "Score", "Rating"]].dropna(subset=["Score"]).sort_values("Date")
-    df_hist = df_hist.set_index("Date")
-    return current, df_hist, None
+    df_hist = pd.DataFrame(all_points).rename(columns={"x": "Timestamp", "y": "Score", "rating": "Rating"})
+    df_hist["Date"] = pd.to_datetime(df_hist["Timestamp"], unit="ms").dt.normalize()
+    df_hist = df_hist[["Date", "Score", "Rating"]].dropna(subset=["Score"])
+    # 여러 구간을 이어붙이면서 겹치는 날짜가 생길 수 있어 중복 제거
+    df_hist = df_hist.drop_duplicates(subset="Date").sort_values("Date").set_index("Date")
+    return (current or None), df_hist, diagnostics
 
 
 def render_fng_gauge(score: float):
@@ -1142,10 +1175,10 @@ with tab9:
         "0에 가까울수록 극단적 공포(Extreme Fear), 100에 가까울수록 극단적 탐욕(Extreme Greed)을 의미합니다."
     )
 
-    current, df_fng_hist, fng_err = get_fear_greed_data()
+    current, df_fng_hist, fng_diag = get_fear_greed_data()
 
-    if fng_err or not current or current.get("score") is None:
-        st.error(f"CNN Fear & Greed 데이터를 불러오지 못했습니다: {fng_err or '알 수 없는 오류'}")
+    if not current or current.get("score") is None:
+        st.error(f"CNN Fear & Greed 데이터를 불러오지 못했습니다: {fng_diag.get('error') or '알 수 없는 오류'}")
         st.caption("CNN이 페이지 구조를 바꿨거나, 네트워크에서 해당 주소로의 접근이 막혀 있을 수 있습니다.")
     else:
         score = current.get("score")
@@ -1188,6 +1221,14 @@ with tab9:
         if df_fng_hist.empty:
             st.warning("과거 히스토리 데이터를 불러오지 못했습니다.")
         else:
+            hist_start = df_fng_hist.index.min().strftime("%Y-%m-%d")
+            hist_end = df_fng_hist.index.max().strftime("%Y-%m-%d")
+            st.caption(
+                f"확보된 히스토리 범위: {hist_start} ~ {hist_end} "
+                f"({fng_diag.get('chunks_ok')}/{fng_diag.get('chunks_total')} 구간 요청 성공) · "
+                "기간 버튼은 이 범위 안에서 필터링됩니다. 범위가 예상보다 짧다면 CNN 쪽에서 "
+                "일부 구간 요청이 막혔을 가능성이 있습니다."
+            )
             col_p9, col_o9 = st.columns([3, 1])
             with col_p9:
                 period_option_9 = st.radio(
