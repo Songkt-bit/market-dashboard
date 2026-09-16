@@ -10,12 +10,16 @@ import json
 import os
 
 # pykrx는 코스피 종목 리스트/시세 조회(Page 10)에만 필요한 선택적 의존성입니다.
-# requirements.txt에 pykrx가 없으면 여기서 조용히 꺼두고, 해당 탭에서만 안내 메시지를 띄웁니다.
+# requirements.txt에 pykrx가 없거나 설치가 실패하면 여기서 조용히 꺼두고, 해당 탭에서만
+# 안내 메시지를 띄웁니다. (ImportError뿐 아니라 pykrx 내부 의존성 문제로 다른 종류의
+# 예외가 날 수도 있어서 넓게 잡아, 전체 앱이 죽지 않고 이 기능만 비활성화되게 합니다)
 try:
     from pykrx import stock as pykrx_stock
     PYKRX_AVAILABLE = True
-except ImportError:
+    PYKRX_IMPORT_ERROR = None
+except Exception as e:
     PYKRX_AVAILABLE = False
+    PYKRX_IMPORT_ERROR = f"{type(e).__name__}: {e}"
 
 # 1. 웹페이지 기본 설정
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
@@ -615,49 +619,78 @@ BREADTH_SMA_WINDOW = 50
 
 
 @st.cache_data(ttl=86400)
-def get_sp500_tickers() -> list:
-    """위키피디아 S&P500 편입종목 리스트. 야후 파이낸스 형식에 맞춰 '.'을 '-'로 치환(예: BRK.B -> BRK-B)."""
+def get_sp500_tickers():
+    """
+    S&P500 편입종목 리스트. 야후 파이낸스 형식에 맞춰 '.'을 '-'로 치환(예: BRK.B -> BRK-B).
+    반환: (tickers, error_message)
+    1순위로 datahub의 CSV(순수 requests+pandas.read_csv만 필요, lxml/html5lib 같은 별도
+    HTML 파서 의존성이 없음)를 쓰고, 실패하면 위키피디아 표를 pd.read_html로 긁는 방식을
+    보조로 시도합니다. (pd.read_html은 lxml 또는 html5lib이 설치돼 있어야 동작하는데,
+    이게 requirements.txt에 없으면 조용히 실패하는 경우가 많아서 기본 경로에서 뺐습니다.)
+    """
+    csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+    try:
+        res = requests.get(csv_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        res.raise_for_status()
+        df = pd.read_csv(io.StringIO(res.text))
+        symbol_col = "Symbol" if "Symbol" in df.columns else df.columns[0]
+        tickers = df[symbol_col].astype(str).str.strip().str.replace(".", "-", regex=False).tolist()
+        tickers = sorted(set(t for t in tickers if t and t.lower() != "nan"))
+        if tickers:
+            return tickers, None
+    except Exception as e:
+        csv_err = f"{type(e).__name__}: {e}"
+    else:
+        csv_err = "빈 목록이 반환됨"
+
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
         df = tables[0]
         tickers = df["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
-        return sorted(set(tickers))
-    except Exception:
-        return []
+        tickers = sorted(set(tickers))
+        if tickers:
+            return tickers, None
+        return [], f"CSV 실패({csv_err}) / 위키피디아도 빈 목록"
+    except Exception as e:
+        return [], f"CSV 실패({csv_err}) / 위키피디아도 실패({type(e).__name__}: {e})"
 
 
 @st.cache_data(ttl=86400)
-def get_kospi200_tickers() -> list:
-    """코스피200 구성종목 코드 리스트 (pykrx, 6자리 코드)."""
+def get_kospi200_tickers():
+    """코스피200 구성종목 코드 리스트 (pykrx, 6자리 코드). 반환: (codes, error_message)"""
     if not PYKRX_AVAILABLE:
-        return []
+        return [], f"pykrx 임포트 실패: {PYKRX_IMPORT_ERROR}"
+    last_err = None
     for date_arg in (datetime.date.today().strftime("%Y%m%d"), None):
         try:
             codes = pykrx_stock.get_index_portfolio_deposit_file("1028", date_arg) if date_arg \
                 else pykrx_stock.get_index_portfolio_deposit_file("1028")
             if codes:
-                return sorted(set(codes))
-        except Exception:
+                return sorted(set(codes)), None
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
             continue
-    return []
+    return [], (last_err or "빈 목록이 반환됨")
 
 
 @st.cache_data(ttl=86400, show_spinner="S&P500 약 500개 종목 데이터를 불러오는 중입니다 (최초 로딩은 1~2분 정도 걸릴 수 있어요)...")
 def get_sp500_breadth_data(years: int = BREADTH_MAX_YEARS):
     """
     S&P500 종목별 종가를 받아 50일선 상회 비율(%)의 일별 시계열을 계산합니다.
-    반환: (breadth_series, coverage_dict)  coverage_dict = {"ok": 성공 종목 수, "total": 전체 종목 수}
+    반환: (breadth_series, coverage_dict)
+    coverage_dict = {"ok": 성공 종목 수, "total": 전체 종목 수, "error": 실패 사유 or None}
     """
-    tickers = get_sp500_tickers()
+    tickers, tick_err = get_sp500_tickers()
     if not tickers:
-        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+        return pd.Series(dtype=float), {"ok": 0, "total": 0, "error": f"종목 리스트 확보 실패 — {tick_err}"}
 
     start = datetime.date.today() - datetime.timedelta(days=365 * years + 90)
     try:
         raw = yf.download(tickers, start=start.strftime("%Y-%m-%d"), progress=False,
                            group_by="ticker", threads=True)
-    except Exception:
-        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers)}
+    except Exception as e:
+        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers),
+                                         "error": f"yfinance 일괄 다운로드 실패 — {type(e).__name__}: {e}"}
 
     above_frames = []
     ok = 0
@@ -677,23 +710,24 @@ def get_sp500_breadth_data(years: int = BREADTH_MAX_YEARS):
         ok += 1
 
     if not above_frames:
-        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers)}
+        return pd.Series(dtype=float), {"ok": 0, "total": len(tickers),
+                                         "error": "종목별 종가 데이터를 하나도 얻지 못했습니다 (yfinance 응답 구조 문제 가능성)"}
 
     above_df = pd.concat(above_frames, axis=1)
     breadth = (above_df.mean(axis=1, skipna=True) * 100).dropna()
     breadth.index = pd.to_datetime(breadth.index)
-    return breadth, {"ok": ok, "total": len(tickers)}
+    return breadth, {"ok": ok, "total": len(tickers), "error": None}
 
 
 @st.cache_data(ttl=86400, show_spinner="코스피200 종목 데이터를 불러오는 중입니다 (최초 로딩은 몇 분 정도 걸릴 수 있어요)...")
 def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
     """코스피200 종목별 종가를 pykrx로 받아 50일선 상회 비율(%)의 일별 시계열을 계산합니다."""
     if not PYKRX_AVAILABLE:
-        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+        return pd.Series(dtype=float), {"ok": 0, "total": 0, "error": f"pykrx 임포트 실패 — {PYKRX_IMPORT_ERROR}"}
 
-    codes = get_kospi200_tickers()
+    codes, code_err = get_kospi200_tickers()
     if not codes:
-        return pd.Series(dtype=float), {"ok": 0, "total": 0}
+        return pd.Series(dtype=float), {"ok": 0, "total": 0, "error": f"코스피200 종목 리스트 확보 실패 — {code_err}"}
 
     start = datetime.date.today() - datetime.timedelta(days=365 * years + 90)
     start_str = start.strftime("%Y%m%d")
@@ -701,10 +735,12 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
 
     above_frames = []
     ok = 0
+    last_fetch_err = None
     for code in codes:
         try:
             df = pykrx_stock.get_market_ohlcv(start_str, end_str, code)
-        except Exception:
+        except Exception as e:
+            last_fetch_err = f"{type(e).__name__}: {e}"
             continue
         if df is None or df.empty or "종가" not in df.columns:
             continue
@@ -718,12 +754,15 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
         ok += 1
 
     if not above_frames:
-        return pd.Series(dtype=float), {"ok": 0, "total": len(codes)}
+        err_msg = "종목별 시세 데이터를 하나도 얻지 못했습니다"
+        if last_fetch_err:
+            err_msg += f" (예: {last_fetch_err})"
+        return pd.Series(dtype=float), {"ok": 0, "total": len(codes), "error": err_msg}
 
     above_df = pd.concat(above_frames, axis=1)
     breadth = (above_df.mean(axis=1, skipna=True) * 100).dropna()
     breadth.index = pd.to_datetime(breadth.index)
-    return breadth, {"ok": ok, "total": len(codes)}
+    return breadth, {"ok": ok, "total": len(codes), "error": None}
 
 
 @st.cache_data(ttl=3600)
@@ -1517,7 +1556,8 @@ with tab10:
     if not PYKRX_AVAILABLE:
         st.warning(
             "코스피 데이터를 받아오려면 `pykrx` 패키지가 필요합니다. requirements.txt에 "
-            "`pykrx`를 추가하고 재배포해주세요. (S&P500은 pykrx 없이도 조회됩니다.)"
+            "`pykrx`를 추가하고 재배포해주세요. (S&P500은 pykrx 없이도 조회됩니다.)\n\n"
+            f"현재 임포트 실패 사유: `{PYKRX_IMPORT_ERROR}`"
         )
 
     period_option_10 = st.radio(
@@ -1530,12 +1570,16 @@ with tab10:
     if PYKRX_AVAILABLE:
         kospi_breadth, kospi_cov = get_kospi200_breadth_data()
     else:
-        kospi_breadth, kospi_cov = pd.Series(dtype=float), {"ok": 0, "total": 0}
+        kospi_breadth, kospi_cov = pd.Series(dtype=float), {
+            "ok": 0, "total": 0, "error": f"pykrx 임포트 실패 — {PYKRX_IMPORT_ERROR}"
+        }
 
     def _render_breadth_chart(col, title, breadth_series, coverage, index_ticker, line_color):
         with col:
             if breadth_series.empty:
-                st.warning(f"{title} 데이터를 불러오지 못했습니다.")
+                st.error(f"{title} 데이터를 불러오지 못했습니다.")
+                if coverage.get("error"):
+                    st.caption(f"실패 사유: {coverage['error']}")
                 return
             plot_series = breadth_series[breadth_series.index >= pd.to_datetime(start_date_10)]
             if plot_series.empty:
