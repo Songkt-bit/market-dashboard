@@ -1485,7 +1485,7 @@ with tab9:
                 "기간 버튼은 이 범위 안에서 필터링됩니다. 범위가 예상보다 짧다면 CNN 쪽에서 "
                 "일부 구간 요청이 막혔을 가능성이 있습니다."
             )
-            col_p9, col_o9 = st.columns([3, 1])
+                        col_p9, col_o9 = st.columns([3, 1])
             with col_p9:
                 period_option_9 = st.radio(
                     "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "Max", "YTD"],
@@ -1518,17 +1518,22 @@ with tab9:
             fig9.add_hrect(y0=0, y1=25, fillcolor="rgba(178,59,59,0.10)", line_width=0)
             fig9.add_hrect(y0=75, y1=100, fillcolor="rgba(63,145,66,0.10)", line_width=0)
 
-            if show_kospi_9:
-                df_kospi9 = yf.download("^KS11", start=start_date_9.strftime("%Y-%m-%d"), progress=False)
-                if not df_kospi9.empty:
-                    kclose9 = df_kospi9['Close'] if isinstance(df_kospi9.columns, pd.MultiIndex) else df_kospi9[['Close']]
-                    kclose9 = kclose9.iloc[:, 0]
-                    fig9.add_trace(
-                        go.Scatter(x=kclose9.index, y=kclose9.values, name="코스피",
-                                   line=dict(color="black", width=1.3)),
-                        secondary_y=True
+            INDEX_TICKERS_9 = {"코스피": "^KS11", "S&P500": "^GSPC", "나스닥": "^IXIC"}
+            INDEX_COLORS_9 = {"코스피": "#111111", "S&P500": "#2563eb", "나스닥": "#d97706"}
+
+            if overlay_indices_9:
+                for idx_name_9 in overlay_indices_9:
+                    idx_series_9 = get_single_index_close(
+                        INDEX_TICKERS_9[idx_name_9], start_date_9.strftime("%Y-%m-%d")
                     )
-                fig9.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
+                    if not idx_series_9.empty:
+                        idx_norm_9 = idx_series_9 / idx_series_9.iloc[0] * 100
+                        fig9.add_trace(
+                            go.Scatter(x=idx_norm_9.index, y=idx_norm_9.values, name=idx_name_9,
+                                       line=dict(color=INDEX_COLORS_9.get(idx_name_9), width=1.3)),
+                            secondary_y=True
+                        )
+                fig9.update_yaxes(title_text="주가지수 (기간 시작=100)", secondary_y=True)
 
             fig9.update_layout(
                 height=420, margin=CHART9_MARGIN,
