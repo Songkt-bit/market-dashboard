@@ -628,20 +628,26 @@ def get_sp500_tickers():
     보조로 시도합니다. (pd.read_html은 lxml 또는 html5lib이 설치돼 있어야 동작하는데,
     이게 requirements.txt에 없으면 조용히 실패하는 경우가 많아서 기본 경로에서 뺐습니다.)
     """
-    csv_url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
-    try:
-        res = requests.get(csv_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        res.raise_for_status()
-        df = pd.read_csv(io.StringIO(res.text))
-        symbol_col = "Symbol" if "Symbol" in df.columns else df.columns[0]
-        tickers = df[symbol_col].astype(str).str.strip().str.replace(".", "-", regex=False).tolist()
-        tickers = sorted(set(t for t in tickers if t and t.lower() != "nan"))
-        if tickers:
-            return tickers, None
-    except Exception as e:
-        csv_err = f"{type(e).__name__}: {e}"
-    else:
-        csv_err = "빈 목록이 반환됨"
+    csv_urls = [
+        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv",
+        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv",
+        "https://datahub.io/core/s-and-p-500-companies/_r/-/data/constituents.csv",
+    ]
+    csv_errs = []
+    for csv_url in csv_urls:
+        try:
+            res = requests.get(csv_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            res.raise_for_status()
+            df = pd.read_csv(io.StringIO(res.text))
+            symbol_col = "Symbol" if "Symbol" in df.columns else df.columns[0]
+            tickers = df[symbol_col].astype(str).str.strip().str.replace(".", "-", regex=False).tolist()
+            tickers = sorted(set(t for t in tickers if t and t.lower() != "nan"))
+            if tickers:
+                return tickers, None
+            csv_errs.append(f"{csv_url}: 빈 목록")
+        except Exception as e:
+            csv_errs.append(f"{csv_url}: {type(e).__name__}: {e}")
+    csv_err = " | ".join(csv_errs)
 
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
@@ -1537,6 +1543,46 @@ with tab9:
                     "CSV로 다운로드", data=csv_bytes,
                     file_name="cnn_fear_greed_history.csv", mime="text/csv"
                 )
+
+            st.divider()
+
+            # ---- VIX 지수(변동성지수) 히스토리 ----
+            # F&G와 같은 기간 선택(period_option_9/start_date_9)을 그대로 재사용해서
+            # 두 지표를 같은 구간으로 비교해볼 수 있게 했습니다. (코스피 오버레이가 이미
+            # F&G 차트의 보조축을 쓰고 있어서, VIX는 축 충돌 없이 별도 차트로 뒀습니다)
+            st.markdown("### 😱 VIX 지수(변동성지수) 추이")
+            st.caption(
+                "VIX는 S&P500 옵션 가격에서 역산한 향후 30일 예상 변동성 지수로, 시장의 "
+                "'공포 게이지'로도 불립니다. 통상 20 이상이면 변동성이 커진 구간, 30 이상이면 "
+                "위기성 구간으로 해석합니다."
+            )
+
+            df_vix = get_single_index_close("^VIX", start_date_9.strftime("%Y-%m-%d"))
+            if df_vix.empty:
+                st.warning("VIX 데이터를 불러오지 못했습니다.")
+            else:
+                latest_vix = df_vix.iloc[-1]
+                fig_vix = go.Figure()
+                fig_vix.add_hrect(y0=30, y1=max(float(df_vix.max()), 30) + 5,
+                                   fillcolor="rgba(178,59,59,0.10)", line_width=0)
+                fig_vix.add_hrect(y0=0, y1=15, fillcolor="rgba(63,145,66,0.10)", line_width=0)
+                fig_vix.add_hline(y=20, line_dash="dot", line_color="gray", opacity=0.6)
+                fig_vix.add_hline(y=30, line_dash="dot", line_color="gray", opacity=0.6)
+                fig_vix.add_trace(go.Scatter(
+                    x=df_vix.index, y=df_vix.values, name="VIX",
+                    line=dict(color="#c0392b", width=1.6)
+                ))
+                fig_vix.update_layout(
+                    title=f"<b>VIX 지수</b> | 현재: {latest_vix:.1f}",
+                    height=380, margin=dict(l=20, r=20, t=40, b=20), showlegend=False
+                )
+                fig_vix.update_yaxes(title_text="VIX")
+                st.plotly_chart(fig_vix, use_container_width=True)
+
+                col_v1, col_v2, col_v3 = st.columns(3)
+                col_v1.metric("현재 VIX", f"{latest_vix:.1f}")
+                col_v2.metric("선택 구간 평균", f"{df_vix.mean():.1f}")
+                col_v3.metric("선택 구간 최고", f"{df_vix.max():.1f}")
 
 # ==========================================
 # [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
