@@ -1485,53 +1485,63 @@ with tab9:
                 "기간 버튼은 이 범위 안에서 필터링됩니다. 범위가 예상보다 짧다면 CNN 쪽에서 "
                 "일부 구간 요청이 막혔을 가능성이 있습니다."
             )
-            col_p9, col_o9 = st.columns([3, 1])
-            with col_p9:
-                period_option_9 = st.radio(
-                    "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "Max", "YTD"],
-                    index=0, horizontal=True, key="fng_p9"
-                )
-            with col_o9:
-                show_kospi_9 = st.checkbox("코스피와 함께 보기", value=False, key="fng_kospi_overlay")
+            period_option_9 = st.radio(
+                "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "Max", "YTD"],
+                index=0, horizontal=True, key="fng_p9"
+            )
+            st.caption("💡 아래 범례를 클릭하면 해당 지표를 껐다 켤 수 있고, 더블클릭하면 그 지표만 단독으로 볼 수 있습니다.")
 
             start_date_9 = get_start_date(period_option_9)
             df_plot9 = df_fng_hist[df_fng_hist.index >= pd.to_datetime(start_date_9)]
+            df_vix_9 = get_single_index_close("^VIX", start_date_9.strftime("%Y-%m-%d"))
+            df_kospi_9 = get_single_index_close("^KS11", start_date_9.strftime("%Y-%m-%d"))
 
-            fig9 = make_subplots(specs=[[{"secondary_y": True}]])
-            fig9.add_trace(
-                go.Scatter(x=df_plot9.index, y=df_plot9['Score'], name="Fear & Greed",
-                           line=dict(color="#4f46e5", width=1.6)),
-                secondary_y=False
-            )
-            # 극단적 공포 / 극단적 탐욕 구간 배경 음영
-            fig9.add_hrect(y0=0, y1=25, fillcolor="rgba(178,59,59,0.10)", line_width=0)
-            fig9.add_hrect(y0=75, y1=100, fillcolor="rgba(63,145,66,0.10)", line_width=0)
+            # 3개 지표(Fear&Greed 0~100 / VIX 10~90대 / 코스피 2000~4000대)는 스케일이 서로
+            # 달라서, y축을 3개(왼쪽: F&G, 오른쪽: VIX, 더 오른쪽: 코스피)로 따로 두고 한
+            # 차트에 겹쳐 그립니다. 각 지표는 범례 클릭으로 개별 토글이 가능합니다(Plotly 기본 기능).
+            fig9 = go.Figure()
+            fig9.add_hrect(y0=0, y1=25, fillcolor="rgba(178,59,59,0.08)", line_width=0)
+            fig9.add_hrect(y0=75, y1=100, fillcolor="rgba(63,145,66,0.08)", line_width=0)
 
-            if show_kospi_9:
-                df_kospi9 = yf.download("^KS11", start=start_date_9.strftime("%Y-%m-%d"), progress=False)
-                if not df_kospi9.empty:
-                    kclose9 = df_kospi9['Close'] if isinstance(df_kospi9.columns, pd.MultiIndex) else df_kospi9[['Close']]
-                    kclose9 = kclose9.iloc[:, 0]
-                    fig9.add_trace(
-                        go.Scatter(x=kclose9.index, y=kclose9.values, name="코스피",
-                                   line=dict(color="black", width=1.3)),
-                        secondary_y=True
-                    )
-                fig9.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
+            fig9.add_trace(go.Scatter(
+                x=df_plot9.index, y=df_plot9['Score'], name="Fear & Greed",
+                line=dict(color="#4f46e5", width=1.8), yaxis="y"
+            ))
+            if len(df_vix_9) > 0:
+                fig9.add_trace(go.Scatter(
+                    x=df_vix_9.index, y=df_vix_9.values, name="VIX",
+                    line=dict(color="#c0392b", width=1.3), yaxis="y2"
+                ))
+            if len(df_kospi_9) > 0:
+                fig9.add_trace(go.Scatter(
+                    x=df_kospi_9.index, y=df_kospi_9.values, name="코스피",
+                    line=dict(color="black", width=1.3), yaxis="y3"
+                ))
 
             fig9.update_layout(
-                height=450, margin=dict(l=20, r=20, t=30, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                height=480,
+                margin=dict(l=20, r=70, t=30, b=20),
+                xaxis=dict(domain=[0.0, 0.86]),
+                yaxis=dict(title="Fear & Greed", range=[0, 100], side="left"),
+                yaxis2=dict(title="VIX", overlaying="y", side="right", showgrid=False),
+                yaxis3=dict(title="코스피 (pt)", overlaying="y", side="right",
+                            anchor="free", position=1.0, showgrid=False),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
             )
-            fig9.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=False)
             st.plotly_chart(fig9, use_container_width=True)
 
-            # 선택 구간 요약 통계 (투자 참고용)
+            # 현재값 한눈에 보기
+            col_n1, col_n2, col_n3 = st.columns(3)
+            col_n1.metric("현재 Fear & Greed", f"{df_plot9['Score'].iloc[-1]:.0f}" if len(df_plot9) else "N/A")
+            col_n2.metric("현재 VIX", f"{df_vix_9.iloc[-1]:.1f}" if len(df_vix_9) else "N/A")
+            col_n3.metric("현재 코스피", f"{df_kospi_9.iloc[-1]:,.1f}" if len(df_kospi_9) else "N/A")
+
+            # 선택 구간 요약 통계 (Fear & Greed 기준, 투자 참고용)
             if len(df_plot9) > 0:
                 col_a9, col_b9, col_c9, col_d9 = st.columns(4)
-                col_a9.metric("선택 구간 평균", f"{df_plot9['Score'].mean():.1f}")
-                col_b9.metric("선택 구간 최저", f"{df_plot9['Score'].min():.1f}")
-                col_c9.metric("선택 구간 최고", f"{df_plot9['Score'].max():.1f}")
+                col_a9.metric("F&G 선택 구간 평균", f"{df_plot9['Score'].mean():.1f}")
+                col_b9.metric("F&G 선택 구간 최저", f"{df_plot9['Score'].min():.1f}")
+                col_c9.metric("F&G 선택 구간 최고", f"{df_plot9['Score'].max():.1f}")
                 extreme_fear_days = int((df_plot9['Score'] < 25).sum())
                 extreme_fear_pct = extreme_fear_days / len(df_plot9) * 100
                 col_d9.metric("극단적 공포 일수", f"{extreme_fear_days}일 ({extreme_fear_pct:.1f}%)")
@@ -1543,46 +1553,6 @@ with tab9:
                     "CSV로 다운로드", data=csv_bytes,
                     file_name="cnn_fear_greed_history.csv", mime="text/csv"
                 )
-
-            st.divider()
-
-            # ---- VIX 지수(변동성지수) 히스토리 ----
-            # F&G와 같은 기간 선택(period_option_9/start_date_9)을 그대로 재사용해서
-            # 두 지표를 같은 구간으로 비교해볼 수 있게 했습니다. (코스피 오버레이가 이미
-            # F&G 차트의 보조축을 쓰고 있어서, VIX는 축 충돌 없이 별도 차트로 뒀습니다)
-            st.markdown("### 😱 VIX 지수(변동성지수) 추이")
-            st.caption(
-                "VIX는 S&P500 옵션 가격에서 역산한 향후 30일 예상 변동성 지수로, 시장의 "
-                "'공포 게이지'로도 불립니다. 통상 20 이상이면 변동성이 커진 구간, 30 이상이면 "
-                "위기성 구간으로 해석합니다."
-            )
-
-            df_vix = get_single_index_close("^VIX", start_date_9.strftime("%Y-%m-%d"))
-            if df_vix.empty:
-                st.warning("VIX 데이터를 불러오지 못했습니다.")
-            else:
-                latest_vix = df_vix.iloc[-1]
-                fig_vix = go.Figure()
-                fig_vix.add_hrect(y0=30, y1=max(float(df_vix.max()), 30) + 5,
-                                   fillcolor="rgba(178,59,59,0.10)", line_width=0)
-                fig_vix.add_hrect(y0=0, y1=15, fillcolor="rgba(63,145,66,0.10)", line_width=0)
-                fig_vix.add_hline(y=20, line_dash="dot", line_color="gray", opacity=0.6)
-                fig_vix.add_hline(y=30, line_dash="dot", line_color="gray", opacity=0.6)
-                fig_vix.add_trace(go.Scatter(
-                    x=df_vix.index, y=df_vix.values, name="VIX",
-                    line=dict(color="#c0392b", width=1.6)
-                ))
-                fig_vix.update_layout(
-                    title=f"<b>VIX 지수</b> | 현재: {latest_vix:.1f}",
-                    height=380, margin=dict(l=20, r=20, t=40, b=20), showlegend=False
-                )
-                fig_vix.update_yaxes(title_text="VIX")
-                st.plotly_chart(fig_vix, use_container_width=True)
-
-                col_v1, col_v2, col_v3 = st.columns(3)
-                col_v1.metric("현재 VIX", f"{latest_vix:.1f}")
-                col_v2.metric("선택 구간 평균", f"{df_vix.mean():.1f}")
-                col_v3.metric("선택 구간 최고", f"{df_vix.max():.1f}")
 
 # ==========================================
 # [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
