@@ -1485,7 +1485,7 @@ with tab9:
                 "기간 버튼은 이 범위 안에서 필터링됩니다. 범위가 예상보다 짧다면 CNN 쪽에서 "
                 "일부 구간 요청이 막혔을 가능성이 있습니다."
             )
-                        col_p9, col_o9 = st.columns([3, 1])
+            col_p9, col_o9 = st.columns([3, 1])
             with col_p9:
                 period_option_9 = st.radio(
                     "조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "Max", "YTD"],
