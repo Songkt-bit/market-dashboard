@@ -1571,7 +1571,8 @@ with tab9:
             st.caption(
                 "VIX는 S&P500 옵션 가격에서 역산한 향후 30일 예상 변동성 지수로, 시장의 "
                 "'공포 게이지'로도 불립니다. 통상 20 이상이면 변동성이 커진 구간, 30 이상이면 "
-                "위기성 구간으로 해석합니다."
+                "위기성 구간으로 해석합니다. Fear & Greed 지수를 우측 축에 함께 표시해 서로 "
+                "대조해볼 수 있습니다."
             )
 
             df_vix = get_single_index_close("^VIX", start_date_9.strftime("%Y-%m-%d"))
@@ -1579,21 +1580,29 @@ with tab9:
                 st.warning("VIX 데이터를 불러오지 못했습니다.")
             else:
                 latest_vix = df_vix.iloc[-1]
-                fig_vix = go.Figure()
+                fig_vix = make_subplots(specs=[[{"secondary_y": True}]])
                 fig_vix.add_hrect(y0=30, y1=max(float(df_vix.max()), 30) + 5,
                                    fillcolor="rgba(178,59,59,0.10)", line_width=0)
                 fig_vix.add_hrect(y0=0, y1=15, fillcolor="rgba(63,145,66,0.10)", line_width=0)
                 fig_vix.add_hline(y=20, line_dash="dot", line_color="gray", opacity=0.6)
                 fig_vix.add_hline(y=30, line_dash="dot", line_color="gray", opacity=0.6)
-                fig_vix.add_trace(go.Scatter(
-                    x=df_vix.index, y=df_vix.values, name="VIX",
-                    line=dict(color="#c0392b", width=1.6)
-                ))
+                fig_vix.add_trace(
+                    go.Scatter(x=df_vix.index, y=df_vix.values, name="VIX",
+                               line=dict(color="#c0392b", width=1.6)),
+                    secondary_y=False
+                )
+                fig_vix.add_trace(
+                    go.Scatter(x=df_plot9.index, y=df_plot9['Score'], name="Fear & Greed",
+                               line=dict(color="#4f46e5", width=1.3)),
+                    secondary_y=True
+                )
                 fig_vix.update_layout(
                     title=f"<b>VIX 지수</b> | 현재: {latest_vix:.1f}",
-                    height=420, margin=CHART9_MARGIN, showlegend=False
+                    height=420, margin=CHART9_MARGIN,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
                 )
-                fig_vix.update_yaxes(title_text="VIX")
+                fig_vix.update_yaxes(title_text="VIX", secondary_y=False)
+                fig_vix.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=True)
                 fig_vix.update_xaxes(range=x_range_9)
                 st.plotly_chart(fig_vix, use_container_width=True)
 
