@@ -1000,28 +1000,27 @@ with tab5:
 
         # 시트가 한 행 = (날짜, SKU 하나) 롱포맷이라 SKU 7종이 다 섞여 있음.
         # 세대별로 하나씩만 대표 SKU를 골라서 비교 가능하게 함.
-        # DDR4·DDR3는 업계에서 관행적으로 현물가 벤치마크로 쓰는 '칩(다이)' 단위 SKU를 택했고,
-        # DDR5는 시트에 칩 단위 항목이 없어 유일하게 있는 모듈(SO-DIMM) 가격을 그대로 씀.
-        # → 원하는 SKU가 다르면 아래 REPRESENTATIVE_ITEMS 값만 바꾸면 됨 (df_dram['Item'].unique()로 전체 목록 확인 가능)
-# Spot Price로 바뀌면서 TrendForce 품목 표기가 달라졌고(공백/괄호 등), 앞으로도
-# eTT 유무 등으로 표기가 미세하게 흔들릴 수 있어서, 완전 일치 대신 세대별 접두어로
-# 첫 번째 매칭 품목을 자동으로 찾도록 바꿉니다.
-REPRESENTATIVE_ITEM_PREFIXES = {
-    "DDR5": "DDR5 16Gb",
-    "DDR4": "DDR4 8Gb",
-    "DDR3": "DDR3 4Gb",
-}
-palette = {"DDR5": "#4f46e5", "DDR4": "#ff7f0e", "DDR3": "#16a34a"}
+        # Spot Price로 바뀌면서 TrendForce 품목 표기가 달라졌고(공백/괄호 등), 앞으로도
+        # eTT 유무 등으로 표기가 미세하게 흔들릴 수 있어서, 완전 일치 대신 세대별
+        # 접두어로 첫 번째 매칭 품목을 자동으로 찾도록 합니다.
+        # (원하는 SKU가 다르면 아래 REPRESENTATIVE_ITEM_PREFIXES 값만 바꾸면 됨.
+        #  df_dram['Item'].unique()로 전체 품목 목록 확인 가능)
+        REPRESENTATIVE_ITEM_PREFIXES = {
+            "DDR5": "DDR5 16Gb",
+            "DDR4": "DDR4 8Gb",
+            "DDR3": "DDR3 4Gb",
+        }
+        palette = {"DDR5": "#4f46e5", "DDR4": "#ff7f0e", "DDR3": "#16a34a"}
 
-unique_items = df_dram['Item'].dropna().unique().tolist()
-REPRESENTATIVE_ITEMS = {}
-for gen, prefix in REPRESENTATIVE_ITEM_PREFIXES.items():
-    match = next((it for it in unique_items if it.startswith(prefix)), None)
-    if match:
-        REPRESENTATIVE_ITEMS[gen] = match
+        unique_items = df_dram['Item'].dropna().unique().tolist()
+        REPRESENTATIVE_ITEMS = {}
+        for gen, prefix in REPRESENTATIVE_ITEM_PREFIXES.items():
+            match = next((it for it in unique_items if it.startswith(prefix)), None)
+            if match:
+                REPRESENTATIVE_ITEMS[gen] = match
 
-available_gens = list(REPRESENTATIVE_ITEMS.keys())        
-selected_gens = st.multiselect(
+        available_gens = list(REPRESENTATIVE_ITEMS.keys())
+        selected_gens = st.multiselect(
             "표시할 세대 선택:", options=available_gens, default=available_gens,
             key="dram_gen_select"
         )
