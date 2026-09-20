@@ -3,5 +3,5 @@ yfinance
 pandas
 plotly
 requests
-pykrx
+pykrx>=1.2.9
 setuptools<81
