@@ -177,6 +177,36 @@ def apply_dd_axis(fig, title_text="DD (%)"):
     return fig
 
 
+# ---------------------------------------------------------------------------
+# 제목 + 가로 범례 배치 (글자 겹침 방지)
+# ---------------------------------------------------------------------------
+# plotly는 제목과 legend(orientation="h", y=1.02)를 둘 다 플롯 위쪽 margin 영역에
+# 그립니다. 그런데 기본으로 쓰던 margin(t=40~50)은 둘 중 하나가 겨우 들어갈 높이라,
+# 제목이 길어지면 범례 글자와 같은 줄에서 포개져 보입니다.
+# 그래서 상단 여백을 충분히 주고, 제목은 figure 최상단에(yref="container" 기준),
+# 범례는 플롯 바로 위에 붙여 두 줄로 확실히 분리합니다.
+TITLE_TOP_MARGIN = 92    # 제목과 범례를 함께 올릴 때
+LEGEND_TOP_MARGIN = 56   # 범례만 있을 때
+
+
+def apply_title_and_legend(fig, title_text=None, height=420,
+                           l=20, r=20, b=20,
+                           legend_x=0.5, legend_xanchor="center", title_size=15):
+    """제목과 가로 범례가 겹치지 않도록 상단 여백·위치를 한 번에 잡아줍니다."""
+    fig.update_layout(
+        height=height,
+        margin=dict(l=l, r=r, t=(TITLE_TOP_MARGIN if title_text else LEGEND_TOP_MARGIN), b=b),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor=legend_xanchor, x=legend_x),
+    )
+    if title_text:
+        fig.update_layout(title=dict(
+            text=title_text, x=0.01, xanchor="left", y=0.985, yanchor="top",
+            font=dict(size=title_size),
+        ))
+    return fig
+
+
 # 3. 데이터 수집 엔진
 @st.cache_data(ttl=3600)
 def get_summary_table_data():
@@ -1158,7 +1188,7 @@ with tab3:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['US10Y'], name="미국 국채 10년(좌)", line=dict(color='#1f77b4', width=2)), secondary_y=False)
     fig.add_trace(go.Scatter(x=df_macro.index, y=df_macro['KOSPI'], name="코스피(우)", line=dict(color='black', width=2)), secondary_y=True)
-    fig.update_layout(height=600, margin=dict(l=20, r=20, t=40, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
+    apply_title_and_legend(fig, None, height=600)
     fig.update_yaxes(title_text="미국 국채 10년 (%)", secondary_y=False)
     fig.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
     st.plotly_chart(fig, use_container_width=True)
@@ -1239,11 +1269,7 @@ with tab5:
                 name=f"{gen} ({item_name})", mode='lines+markers',
                 line=dict(color=palette[gen], width=2), marker=dict(size=4),
             ))
-        fig.update_layout(
-            title="<b>D램 현물 평균가(Session Average) 추이</b>",
-            height=480, margin=dict(l=20, r=20, t=40, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-        )
+        apply_title_and_legend(fig, "<b>D램 현물 평균가(Session Average) 추이</b>", height=500)
         fig.update_yaxes(title_text="가격")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1305,11 +1331,11 @@ with tab6:
         latest_pref = df_samsung['Preferred'].iloc[-1]
         latest_disp = df_samsung['Disparity'].iloc[-1]
 
-        fig.update_layout(
-            title=f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=560,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+        apply_title_and_legend(
+            fig,
+            f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 "
+            f"| 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
+            height=580,
         )
         fig.update_xaxes(matches='x')
         # 주가 2종은 하단 60%에, 괴리율은 상단 띠(DISPARITY_BAND)에 배치
@@ -1457,13 +1483,9 @@ with tab7:
                     line=dict(color='black', width=2)
                 ), secondary_y=True)
 
-                fig.update_layout(
-                    title="<b>대한민국 월별 수출 증가율(YoY %) vs 코스피 지수</b>",
-                    xaxis_title="기간 (YY.MM)",
-                    height=450,
-                    margin=dict(l=20, r=20, t=40, b=20),
-                    bargap=0.1,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                fig.update_layout(xaxis_title="기간 (YY.MM)", bargap=0.1)
+                apply_title_and_legend(
+                    fig, "<b>대한민국 월별 수출 증가율(YoY %) vs 코스피 지수</b>", height=470
                 )
                 fig.update_yaxes(title_text="수출 증가율 (%)", secondary_y=False)
                 fig.update_yaxes(title_text="코스피 (pt)", tickformat=",", secondary_y=True)
@@ -1737,7 +1759,9 @@ with tab9:
             # (차트마다 y축 눈금 자릿수가 달라 자동 여백 계산에 맡기면 플롯 영역의 좌우
             # 시작 위치가 미세하게 어긋날 수 있어서, l/r을 고정값으로 못박아 맞춥니다)
             x_range_9 = [pd.to_datetime(start_date_9), pd.to_datetime(datetime.date.today())]
-            CHART9_MARGIN = dict(l=60, r=60, t=40, b=30)
+            # 좌우 여백만 고정하면 두 차트의 플롯 시작/끝 x좌표가 맞습니다.
+            # 상단 여백은 제목 유무에 따라 apply_title_and_legend가 알아서 다르게 잡습니다.
+            CHART9_SIDE = dict(l=60, r=60, b=30)
 
             fig9 = make_subplots(specs=[[{"secondary_y": True}]])
             fig9.add_trace(
@@ -1766,10 +1790,7 @@ with tab9:
                         )
                 fig9.update_yaxes(title_text="주가지수 (기간 시작=100)", secondary_y=True)
 
-            fig9.update_layout(
-                height=420, margin=CHART9_MARGIN,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
-            )
+            apply_title_and_legend(fig9, None, height=420, **CHART9_SIDE)
             fig9.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=False)
             fig9.update_xaxes(range=x_range_9)
             st.plotly_chart(fig9, use_container_width=True)
@@ -1827,10 +1848,9 @@ with tab9:
                                line=dict(color="#4f46e5", width=1.3)),
                     secondary_y=True
                 )
-                fig_vix.update_layout(
-                    title=f"<b>VIX 지수</b> | 현재: {latest_vix:.1f}",
-                    height=420, margin=CHART9_MARGIN,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                apply_title_and_legend(
+                    fig_vix, f"<b>VIX 지수</b> | 현재: {latest_vix:.1f}",
+                    height=440, **CHART9_SIDE
                 )
                 fig_vix.update_yaxes(title_text="VIX", secondary_y=False)
                 fig_vix.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=True)
@@ -1923,10 +1943,12 @@ with tab10:
             fig.update_yaxes(title_text="지수", secondary_y=True)
 
             src_tag = f" · {coverage['source']}" if coverage.get("source") else ""
-            fig.update_layout(
-                title=f"<b>{title}</b> ({coverage['ok']}/{coverage['total']}종목 반영{src_tag}) | 현재: {latest_val:.1f}%",
-                height=420, margin=dict(l=20, r=20, t=50, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+            # 2단 컬럼이라 폭이 좁으므로 제목 글자를 한 단계 줄여 한 줄에 들어가게 함
+            apply_title_and_legend(
+                fig,
+                f"<b>{title}</b> ({coverage['ok']}/{coverage['total']}종목 반영{src_tag}) "
+                f"| 현재: {latest_val:.1f}%",
+                height=440, title_size=13,
             )
             fig.update_yaxes(title_text="50일선 상회 비율 (%)", range=[0, 100], secondary_y=False)
             st.plotly_chart(fig, use_container_width=True)
