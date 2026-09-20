@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
+import math
 import requests
 import io
 import json
@@ -66,6 +67,76 @@ def get_start_date(period_option):
         return today - datetime.timedelta(days=365 * 20)
     else: # Max
         return datetime.date(2000, 1, 1)
+
+
+# ===========================================================================
+# 차트 Y축 배치 헬퍼 — 가격(지수)선과 MDD선을 위/아래로 확실히 갈라놓기
+# ===========================================================================
+# 예전엔 가격축은 plotly 자동에 맡기고 DD축만 [-65, 2] 같은 임의값으로 고정했는데,
+# 두 가지 문제가 있었습니다.
+#   (1) 기간 버튼(1년/3년/5년...)이나 종목에 따라 DD축 스케일이 제각각이라, 차트끼리
+#       나란히 놓고 봐도 "이 회색선이 지금 몇 % 빠진 건지"가 눈으로 비교가 안 됨.
+#   (2) 지수가 직전 최고점 근처에 있으면 가격선이 플롯 맨 위까지 올라가는데, DD도
+#       그 시점엔 0% 부근(=역시 맨 위)이라 두 선이 겹쳐서 아무것도 안 보임.
+#
+# 그래서 엑셀로 그리던 참고 차트(로그 가격축 + 0~-200% MDD축)와 같은 방식으로 바꿉니다.
+#   · DD축은 항상 [-100%, +2%] 고정  → 기간/종목이 뭐든 회색선의 높이 의미가 동일
+#   · 가격축은 "데이터 최고점이 플롯 높이의 60% 지점에 오도록" 위쪽에 여백을 만듦
+#     → 가격선은 아래 60%, DD선은 위 40%를 쓰게 되어 최고점 부근에서도 겹치지 않음
+# 로그축일 때 plotly는 range를 log10 값으로 받으므로, 로그 공간에서 계산해 돌려줍니다.
+DD_AXIS_MIN = -100.0    # MDD 축 하단(요청하신 "최대치 -100%")
+DD_AXIS_MAX = 2.0       # 0% 선이 축 맨 끝에 붙어 잘리지 않도록 살짝 여유
+DD_AXIS_DTICK = 20      # MDD 축 눈금 간격 (0, -20, -40, ... -100)
+PRICE_BAND_TOP = 0.60   # 가격/지수선이 차지할 플롯 높이 비율 (아래에서부터)
+
+# Page 6 괴리율선을 올려놓을 상단 띠 (0=플롯 바닥, 1=플롯 천장)
+DISPARITY_BAND = (0.66, 0.97)
+
+
+def band_axis_range(dmin, dmax, bottom_frac=0.0, top_frac=0.60,
+                    pad_ratio=0.04, log=False):
+    """데이터 구간 [dmin, dmax]가 플롯 높이의 [bottom_frac, top_frac] 띠 안에 딱 들어가도록
+    축의 (min, max)를 역산합니다. 반환값을 plotly yaxis의 range에 그대로 넣으면 됩니다.
+    log=True면 log10 공간에서 계산해 log10 값 쌍을 돌려줍니다(plotly 로그축 규격)."""
+    try:
+        dmin, dmax = float(dmin), float(dmax)
+    except (TypeError, ValueError):
+        return None
+    if not (pd.notna(dmin) and pd.notna(dmax)):
+        return None
+    if log:
+        if dmin <= 0 or dmax <= 0:
+            return None
+        dmin, dmax = math.log10(dmin), math.log10(dmax)
+    if dmax <= dmin:
+        dmax = dmin + (abs(dmin) * 0.01 + 0.01)
+    pad = (dmax - dmin) * pad_ratio
+    lo, hi = dmin - pad, dmax + pad
+    frac = max(top_frac - bottom_frac, 0.05)
+    span = (hi - lo) / frac
+    axis_min = lo - bottom_frac * span
+    return [axis_min, axis_min + span]
+
+
+def price_axis_range(series, log=False, top_frac=PRICE_BAND_TOP):
+    """가격/지수 시리즈를 플롯 하단 top_frac 비율 안으로 눌러 담는 축 범위.
+    (여러 시리즈를 한 축에 그릴 땐 pd.concat 해서 넘기면 됩니다)"""
+    s = pd.Series(series).dropna()
+    if s.empty:
+        return None
+    return band_axis_range(s.min(), s.max(), 0.0, top_frac, log=log)
+
+
+def apply_dd_axis(fig, title_text="DD (%)"):
+    """보조 y축(오른쪽)을 MDD 전용 고정 축으로 세팅 + 0% 기준선"""
+    fig.update_yaxes(
+        title_text=title_text, range=[DD_AXIS_MIN, DD_AXIS_MAX],
+        dtick=DD_AXIS_DTICK, ticksuffix="%", secondary_y=True,
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(120,120,120,0.45)",
+                  line_width=1, secondary_y=True)
+    return fig
+
 
 # 3. 데이터 수집 엔진
 @st.cache_data(ttl=3600)
@@ -898,6 +969,12 @@ with tab_home:
 # ==========================================
 with tab1:
     st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
+    st.caption(
+        "📐 축 읽는 법 — 오른쪽 **MDD 축은 기간 버튼과 무관하게 항상 0% ~ -100%로 고정**되어 있어, "
+        "어떤 기간·어떤 지수를 봐도 회색선의 높이가 같은 낙폭을 의미합니다. "
+        "왼쪽 지수 축은 위쪽에 여백을 둬서 지수선이 플롯 아래 60% 안에서만 움직이도록 했습니다 — "
+        "지수가 직전 최고점에 있어도 0% 근처의 MDD선과 겹치지 않게 하기 위함입니다."
+    )
     col_p1, col_s1 = st.columns([2, 1])
     with col_p1:
         period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
@@ -921,9 +998,16 @@ with tab1:
                 ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
                 c_name = "red" if ytd_val >= 0 else "blue"
                 ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
-            fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=300, showlegend=False)
-            fig.update_yaxes(title_text="지수 (pt)", type="log" if is_log_scale else "linear", secondary_y=False)
-            fig.update_yaxes(title_text="DD (%)", range=[-65, 2], secondary_y=True)
+            fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=340, showlegend=False)
+            # 지수 축: 최고점이 플롯 높이 60% 지점에 오도록 위쪽 여백 확보 (MDD선과 분리)
+            fig.update_yaxes(
+                title_text="지수 (pt)",
+                type="log" if is_log_scale else "linear",
+                range=price_axis_range(df_m['Close'], log=is_log_scale),
+                secondary_y=False,
+            )
+            # MDD 축: 항상 0% ~ -100% 고정
+            apply_dd_axis(fig)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
@@ -931,6 +1015,10 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("주요 통화 환율, 달러 인덱스 및 WTI 원유 추이")
+    st.caption(
+        "📐 Page 1과 동일한 축 규칙 — 오른쪽 MDD 축은 항상 0% ~ -100% 고정, "
+        "왼쪽 가격 축은 상단 여백을 둬 가격선을 플롯 아래 60%에 배치합니다."
+    )
     period_option_2 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=5, horizontal=True, key="fx_p2")
     start_date_2 = get_start_date(period_option_2)
     fx_data_dict = get_fx_long_data(FX_TICKERS, start_date_2.strftime("%Y-%m-%d"))
@@ -940,7 +1028,6 @@ with tab2:
         with cols2[idx % 2]:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             line_color = '#b22222' if "WTI" in name else 'royalblue'
-            dd_range = [-60, 5] if "WTI" in name else [-25, 2]
             fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['Close'], name="가격", line=dict(color=line_color, width=2)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df_fx.index, y=df_fx['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
             latest_val = df_fx['Close'].iloc[-1]
@@ -950,9 +1037,13 @@ with tab2:
                 ytd_val = ((latest_val / df_fx['Close'].iloc[0]) - 1) * 100
                 c_name = "red" if ytd_val >= 0 else "blue"
                 ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
-            fig.update_layout(title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=330, showlegend=False)
-            fig.update_yaxes(title_text="가격 / 지수", secondary_y=False)
-            fig.update_yaxes(title_text="DD (%)", range=dd_range, secondary_y=True)
+            fig.update_layout(title=f"<b>{name}</b> ({latest_val:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=360, showlegend=False)
+            fig.update_yaxes(
+                title_text="가격 / 지수",
+                range=price_axis_range(df_fx['Close']),
+                secondary_y=False,
+            )
+            apply_dd_axis(fig)
             st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
@@ -1070,6 +1161,12 @@ with tab5:
 with tab6:
     st.subheader("📉 삼성전자 보통주 vs 우선주 주가 및 괴리율 통합 차트")
     st.markdown("월평균 괴리율 = (보통주 − 우선주) / 보통주 × 100. 차트 배경 음영은 괴리율이 3%p 이상 좁혀진 주요 구간을 나타냅니다.")
+    st.caption(
+        "📐 축 읽는 법 — Page 1·2의 MDD 차트와 같은 방식으로, **괴리율선(점선)은 차트 상단 띠에, "
+        "주가선 2개는 하단 60%에** 각각 몰아 배치했습니다. 두 계열이 겹치지 않으므로 "
+        "주가가 신고가 부근이어도 괴리율 흐름을 그대로 읽을 수 있습니다. "
+        "오른쪽 괴리율 축의 눈금 간격은 그대로이고 위치만 위로 올라간 것이라, 기울기·변동폭 해석은 동일합니다."
+    )
 
     period_option_6 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=3, horizontal=True, key="samsung_p6")
     start_date_6 = get_start_date(period_option_6)
@@ -1111,12 +1208,37 @@ with tab6:
         fig.update_layout(
             title=f"<b>삼성전자 주가 및 괴리율 통합 추이</b> | 보통주: {latest_common:,.0f}원 | 우선주: {latest_pref:,.0f}원 | 괴리율: {latest_disp:+.2f}%",
             margin=dict(l=20, r=20, t=40, b=20),
-            height=500,
+            height=560,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
         )
         fig.update_xaxes(matches='x')
-        fig.update_yaxes(title_text="주가 (원)", secondary_y=False)
-        fig.update_yaxes(title_text="괴리율 (%)", secondary_y=True)
+        # 주가 2종은 하단 60%에, 괴리율은 상단 띠(DISPARITY_BAND)에 배치
+        fig.update_yaxes(
+            title_text="주가 (원)",
+            range=price_axis_range(pd.concat([df_samsung['Common'], df_samsung['Preferred']])),
+            secondary_y=False,
+        )
+        disp_lo = float(df_samsung['Disparity'].min())
+        disp_hi = float(df_samsung['Disparity'].max())
+        disp_range = band_axis_range(
+            disp_lo, disp_hi,
+            bottom_frac=DISPARITY_BAND[0], top_frac=DISPARITY_BAND[1], pad_ratio=0.08,
+        )
+        # 괴리율 축을 위로 밀어 올리면 축 아래쪽엔 실제로는 나오지 않는 값(음수 괴리율 등)이
+        # 눈금으로 찍혀 지저분해집니다. 그래서 데이터가 실제로 존재하는 구간에만 눈금을 찍습니다.
+        disp_ticks = None
+        if disp_range:
+            step = max(round((disp_hi - disp_lo) / 4 / 5) * 5, 5)
+            t = math.floor(disp_lo / step) * step
+            disp_ticks = []
+            while t <= disp_hi + step:
+                if disp_range[0] <= t <= disp_range[1]:
+                    disp_ticks.append(round(t, 2))
+                t += step
+        fig.update_yaxes(
+            title_text="괴리율 (%)", ticksuffix="%",
+            range=disp_range, tickvals=(disp_ticks or None), secondary_y=True,
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # 범례 설명 표시
