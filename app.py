@@ -10,6 +10,45 @@ import io
 import json
 import os
 
+# ---------------------------------------------------------------------------
+# KRX 로그인 자격증명 주입 — 반드시 pykrx 임포트 "앞"에 있어야 합니다
+# ---------------------------------------------------------------------------
+# 한국거래소 정보데이터시스템(data.krx.co.kr)이 2025-12-27부터 회원제
+# 'KRX Data Marketplace'로 전환되면서 데이터 조회에 로그인이 필수가 됐습니다.
+# (조회 자체는 여전히 무료. AI 봇 스크래핑으로 인한 서버 부하가 이유라고 밝힘)
+# 비로그인 요청은 빈 응답이 오는데, pykrx 내부의 dataframe_empty_handler가 예외를
+# 삼키고 빈 DataFrame을 돌려주기 때문에 "휴장일"과 "로그인 실패"가 구분되지 않고,
+# 결국 get_nearest_business_day_in_a_week()의 df.index[-1]에서
+# `IndexError: index -1 is out of bounds for axis 0 with size 0` 로 터집니다.
+#
+# pykrx 1.2.9는 환경변수 KRX_ID / KRX_PW로 로그인하는데, 이 로그인은
+# pykrx.website.comm.webio 모듈이 임포트되는 그 순간 단 한 번 수행됩니다.
+# 그래서 아래 주입 코드가 `from pykrx import ...` 보다 반드시 위에 와야 합니다.
+#
+# 설정 방법 (ECOS_API_KEY와 동일):
+#   로컬  → .streamlit/secrets.toml 에
+#             KRX_ID = "아이디"
+#             KRX_PW = "비밀번호"
+#   배포  → 앱 Settings → Secrets 에 같은 두 줄 추가
+# ※ 네이버/카카오 간편가입 계정은 여기 쓸 비밀번호가 없습니다.
+#    data.krx.co.kr 에서 ID/비밀번호를 직접 쓰는 일반 회원가입으로 만들어주세요.
+def _inject_krx_credentials() -> bool:
+    try:
+        krx_id = st.secrets.get("KRX_ID", "")
+        krx_pw = st.secrets.get("KRX_PW", "")
+    except Exception:
+        krx_id = krx_pw = ""
+    krx_id = krx_id or os.environ.get("KRX_ID", "")
+    krx_pw = krx_pw or os.environ.get("KRX_PW", "")
+    if krx_id and krx_pw:
+        os.environ["KRX_ID"] = krx_id
+        os.environ["KRX_PW"] = krx_pw
+        return True
+    return False
+
+
+KRX_LOGIN_CONFIGURED = _inject_krx_credentials()
+
 # pykrx는 코스피 종목 리스트/시세 조회(Page 10)에만 필요한 선택적 의존성입니다.
 # requirements.txt에 pykrx가 없거나 설치가 실패하면 여기서 조용히 꺼두고, 해당 탭에서만
 # 안내 메시지를 띄웁니다. (ImportError뿐 아니라 pykrx 내부 의존성 문제로 다른 종류의
@@ -732,22 +771,49 @@ def get_sp500_tickers():
         return [], f"CSV 실패({csv_err}) / 위키피디아도 실패({type(e).__name__}: {e})"
 
 
+KRX_LOGIN_HELP = (
+    "KRX 로그인 정보가 없습니다. 한국거래소 정보데이터시스템이 2025-12-27부터 회원제로 "
+    "전환되어 로그인 없이는 조회가 불가합니다. data.krx.co.kr에서 ID/비밀번호 방식으로 "
+    "회원가입(조회는 무료)한 뒤, Secrets에 KRX_ID / KRX_PW를 추가해주세요."
+)
+
+
 @st.cache_data(ttl=86400)
 def get_kospi200_tickers():
-    """코스피200 구성종목 코드 리스트 (pykrx, 6자리 코드). 반환: (codes, error_message)"""
+    """코스피200 구성종목 코드 리스트 (pykrx, 6자리 코드). 반환: (codes, error_message)
+
+    예전엔 (오늘 날짜, 날짜 없음) 두 번만 시도했는데, 날짜 없이 부르면 pykrx가
+    내부적으로 get_nearest_business_day_in_a_week()를 호출하고 그게 또 KRX를 찔러서
+    빈 응답이 오면 df.index[-1]에서 IndexError로 죽습니다. 그래서 그 함수를 쓰지 않고
+    최근 영업일을 직접 최대 10일까지 거슬러 올라가며 시도합니다.
+    """
     if not PYKRX_AVAILABLE:
         return [], f"pykrx 임포트 실패: {PYKRX_IMPORT_ERROR}"
+    if not KRX_LOGIN_CONFIGURED:
+        return [], KRX_LOGIN_HELP
+
     last_err = None
-    for date_arg in (datetime.date.today().strftime("%Y%m%d"), None):
-        try:
-            codes = pykrx_stock.get_index_portfolio_deposit_file("1028", date_arg) if date_arg \
-                else pykrx_stock.get_index_portfolio_deposit_file("1028")
-            if codes:
-                return sorted(set(codes)), None
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-            continue
-    return [], (last_err or "빈 목록이 반환됨")
+    day = datetime.date.today()
+    tried = 0
+    while tried < 10:
+        if day.weekday() < 5:  # 주말은 건너뜀 (공휴일은 빈 응답으로 걸러짐)
+            tried += 1
+            try:
+                codes = pykrx_stock.get_index_portfolio_deposit_file(
+                    "1028", day.strftime("%Y%m%d")
+                )
+                if codes:
+                    return sorted(set(codes)), None
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+        day -= datetime.timedelta(days=1)
+
+    if last_err:
+        return [], last_err
+    return [], (
+        "최근 10영업일 모두 빈 응답이었습니다. KRX 계정(KRX_ID/KRX_PW)이 올바른지, "
+        "혹은 거래소 쪽에서 이 서버의 요청을 막고 있지 않은지 확인해주세요."
+    )
 
 
 @st.cache_data(ttl=86400, show_spinner="S&P500 약 500개 종목 데이터를 불러오는 중입니다 (최초 로딩은 1~2분 정도 걸릴 수 있어요)...")
@@ -796,50 +862,84 @@ def get_sp500_breadth_data(years: int = BREADTH_MAX_YEARS):
     return breadth, {"ok": ok, "total": len(tickers), "error": None}
 
 
-@st.cache_data(ttl=86400, show_spinner="코스피200 종목 데이터를 불러오는 중입니다 (최초 로딩은 몇 분 정도 걸릴 수 있어요)...")
+@st.cache_data(ttl=86400, show_spinner="코스피200 종목 데이터를 불러오는 중입니다...")
 def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
-    """코스피200 종목별 종가를 pykrx로 받아 50일선 상회 비율(%)의 일별 시계열을 계산합니다."""
-    if not PYKRX_AVAILABLE:
-        return pd.Series(dtype=float), {"ok": 0, "total": 0, "error": f"pykrx 임포트 실패 — {PYKRX_IMPORT_ERROR}"}
+    """코스피200 종목별 종가로 50일선 상회 비율(%)의 일별 시계열을 계산합니다.
 
+    구성종목 리스트는 KRX(pykrx)에서 받아옵니다 — 코스피200은 리밸런싱이 잦아서
+    하드코딩해두면 금방 실제와 어긋나기 때문입니다.
+    시세는 기본적으로 yfinance 일괄 다운로드를 씁니다. pykrx의 get_market_ohlcv는
+    종목당 HTTP 요청 1회라 200종목이면 200번 순차 호출이 되어 최초 로딩이 수 분
+    걸리는데, yfinance는 한 번의 배치 요청으로 끝나 수 초 수준입니다.
+    yfinance가 비어 오면 pykrx 경로로 자동 폴백합니다.
+    """
     codes, code_err = get_kospi200_tickers()
     if not codes:
         return pd.Series(dtype=float), {"ok": 0, "total": 0, "error": f"코스피200 종목 리스트 확보 실패 — {code_err}"}
 
     start = datetime.date.today() - datetime.timedelta(days=365 * years + 90)
-    start_str = start.strftime("%Y%m%d")
-    end_str = datetime.date.today().strftime("%Y%m%d")
-
     above_frames = []
     ok = 0
     last_fetch_err = None
-    for code in codes:
-        try:
-            df = pykrx_stock.get_market_ohlcv(start_str, end_str, code)
-        except Exception as e:
-            last_fetch_err = f"{type(e).__name__}: {e}"
-            continue
-        if df is None or df.empty or "종가" not in df.columns:
-            continue
-        close = df["종가"].astype(float)
+    source_used = None
+
+    def _accumulate(close, label):
+        """종가 시리즈 하나를 받아 50일선 상회 여부 시리즈로 변환해 담기"""
+        nonlocal ok
+        close = pd.Series(close).astype(float)
         close = close[close > 0].dropna()
         if len(close) < BREADTH_SMA_WINDOW + 5:
-            continue
+            return
         sma50 = close.rolling(BREADTH_SMA_WINDOW).mean()
-        above = (close > sma50).where(sma50.notna())
-        above_frames.append(above.rename(code))
+        # sma50이 NaN인 워밍업 구간은 "50일선 아래"가 아니라 "판단 불가"이므로
+        # False가 아닌 NaN으로 남겨 그 날짜의 분모에서 빠지게 함
+        above_frames.append((close > sma50).where(sma50.notna()).rename(label))
         ok += 1
 
+    # --- 1순위: yfinance 배치 (코스피 종목은 '{6자리}.KS') ---
+    yf_tickers = [f"{c}.KS" for c in codes]
+    try:
+        raw = yf.download(yf_tickers, start=start.strftime("%Y-%m-%d"), progress=False,
+                          group_by="ticker", threads=True)
+    except Exception as e:
+        raw = None
+        last_fetch_err = f"yfinance 일괄 다운로드 실패 — {type(e).__name__}: {e}"
+    if raw is not None and not raw.empty:
+        for code, t in zip(codes, yf_tickers):
+            try:
+                close = raw[t]["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw["Close"]
+            except Exception:
+                continue
+            _accumulate(close, code)
+        if above_frames:
+            source_used = "yfinance"
+
+    # --- 2순위: pykrx 폴백 (느리지만 KRX 원본) ---
+    if not above_frames and PYKRX_AVAILABLE:
+        start_str = start.strftime("%Y%m%d")
+        end_str = datetime.date.today().strftime("%Y%m%d")
+        for code in codes:
+            try:
+                df = pykrx_stock.get_market_ohlcv(start_str, end_str, code)
+            except Exception as e:
+                last_fetch_err = f"pykrx 시세 조회 실패 — {type(e).__name__}: {e}"
+                continue
+            if df is None or df.empty or "종가" not in df.columns:
+                continue
+            _accumulate(df["종가"], code)
+        if above_frames:
+            source_used = "pykrx"
+
     if not above_frames:
-        err_msg = "종목별 시세 데이터를 하나도 얻지 못했습니다"
+        err_msg = "종목 리스트는 받았지만 시세 데이터를 하나도 얻지 못했습니다"
         if last_fetch_err:
-            err_msg += f" (예: {last_fetch_err})"
+            err_msg += f" ({last_fetch_err})"
         return pd.Series(dtype=float), {"ok": 0, "total": len(codes), "error": err_msg}
 
     above_df = pd.concat(above_frames, axis=1)
     breadth = (above_df.mean(axis=1, skipna=True) * 100).dropna()
     breadth.index = pd.to_datetime(breadth.index)
-    return breadth, {"ok": ok, "total": len(codes), "error": None}
+    return breadth, {"ok": ok, "total": len(codes), "error": None, "source": source_used}
 
 
 @st.cache_data(ttl=3600)
@@ -1750,7 +1850,8 @@ with tab10:
     st.caption(
         "전체 종목 중 종가가 50일 이동평균선 위에 있는 종목의 비율(%)입니다. 통상 30% 아래로 "
         "떨어지면 시장이 과매도 국면에 가깝고, 70~80% 이상이면 과매수 국면으로 해석합니다. "
-        "S&P500은 위키피디아 편입종목 + yfinance, 코스피는 코스피200 구성종목 + pykrx로 계산합니다."
+        "S&P500은 편입종목 CSV + yfinance, 코스피는 KRX(pykrx)에서 받은 코스피200 "
+        "구성종목 리스트에 yfinance 시세를 붙여 계산합니다."
     )
     st.caption(
         "⚠️ '현재' 편입종목 리스트를 과거 전체 기간에 그대로 적용하는 방식이라 생존편향이 있는 "
@@ -1760,8 +1861,18 @@ with tab10:
     if not PYKRX_AVAILABLE:
         st.warning(
             "코스피 데이터를 받아오려면 `pykrx` 패키지가 필요합니다. requirements.txt에 "
-            "`pykrx`를 추가하고 재배포해주세요. (S&P500은 pykrx 없이도 조회됩니다.)\n\n"
+            "`pykrx>=1.2.9`를 추가하고 재배포해주세요. (S&P500은 pykrx 없이도 조회됩니다.)\n\n"
             f"현재 임포트 실패 사유: `{PYKRX_IMPORT_ERROR}`"
+        )
+    elif not KRX_LOGIN_CONFIGURED:
+        st.warning(
+            "**KRX 로그인 정보가 설정되지 않았습니다.** 한국거래소 정보데이터시스템이 "
+            "2025년 12월 27일부터 회원제(KRX Data Marketplace)로 전환되어, 로그인 없이는 "
+            "구성종목·시세 조회가 되지 않습니다. 조회 자체는 무료입니다.\n\n"
+            "1. data.krx.co.kr 에서 **ID/비밀번호 방식**으로 회원가입 "
+            "(네이버·카카오 간편가입은 여기 쓸 비밀번호가 없어 사용할 수 없습니다)\n"
+            "2. 앱 Settings → Secrets 에 아래 두 줄 추가 후 재시작\n"
+            "```\nKRX_ID = \"아이디\"\nKRX_PW = \"비밀번호\"\n```"
         )
 
     period_option_10 = st.radio(
@@ -1771,11 +1882,15 @@ with tab10:
     start_date_10 = get_start_date(period_option_10)
 
     sp500_breadth, sp500_cov = get_sp500_breadth_data()
-    if PYKRX_AVAILABLE:
+    if PYKRX_AVAILABLE and KRX_LOGIN_CONFIGURED:
         kospi_breadth, kospi_cov = get_kospi200_breadth_data()
-    else:
+    elif not PYKRX_AVAILABLE:
         kospi_breadth, kospi_cov = pd.Series(dtype=float), {
             "ok": 0, "total": 0, "error": f"pykrx 임포트 실패 — {PYKRX_IMPORT_ERROR}"
+        }
+    else:
+        kospi_breadth, kospi_cov = pd.Series(dtype=float), {
+            "ok": 0, "total": 0, "error": KRX_LOGIN_HELP
         }
 
     def _render_breadth_chart(col, title, breadth_series, coverage, index_ticker, line_color):
@@ -1807,8 +1922,9 @@ with tab10:
                 ), secondary_y=True)
             fig.update_yaxes(title_text="지수", secondary_y=True)
 
+            src_tag = f" · {coverage['source']}" if coverage.get("source") else ""
             fig.update_layout(
-                title=f"<b>{title}</b> ({coverage['ok']}/{coverage['total']}종목 반영) | 현재: {latest_val:.1f}%",
+                title=f"<b>{title}</b> ({coverage['ok']}/{coverage['total']}종목 반영{src_tag}) | 현재: {latest_val:.1f}%",
                 height=420, margin=dict(l=20, r=20, t=50, b=20),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
             )
