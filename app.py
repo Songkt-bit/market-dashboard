@@ -1278,14 +1278,18 @@ with tab3:
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
     bonds_data = get_us_bonds_data()
-    selected_bond = st.radio("확인할 국채 만기를 선택하세요:", ["5년물", "10년물", "30년물"], horizontal=True)
-    if selected_bond in bonds_data:
-        df_selected = bonds_data[selected_bond]
-        latest_yield = df_selected.iloc[-1]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_selected.index, y=df_selected.values, name=selected_bond, line=dict(color='#ff7f0e', width=2)))
-        fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)", height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
-        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
+    BOND_COLORS = {"5년물": "#1f77b4", "10년물": "#ff7f0e", "30년물": "#2ca02c"}
+
+    fig = go.Figure()
+    latest_parts = []
+    for name, series in bonds_data.items():
+        fig.add_trace(go.Scatter(x=series.index, y=series.values, name=name, line=dict(color=BOND_COLORS.get(name), width=2)))
+        latest_parts.append(f"{name} {series.iloc[-1]:.3f}%")
+    title_text = "<b>미국 국채 만기별 금리</b> (현재: " + " · ".join(latest_parts) + ")"
+    apply_title_and_legend(fig, title_text, height=500)
+    fig.update_yaxes(title_text="수익률 (%)")
+    fig.update_xaxes(title_text="연도")
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
 # ==========================================
 # [Page 5] 반도체(D램) 가격 추이
