@@ -1189,7 +1189,7 @@ with tab1:
                 )
                 # MDD 축: 항상 0% ~ -100% 고정
                 apply_dd_axis(fig)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
     with st.expander("📉 지수별 하락 빈도 (S&P 500 · 코스피)", expanded=False):
         st.caption(
@@ -1253,7 +1253,7 @@ with tab2:
                 secondary_y=False,
             )
             apply_dd_axis(fig)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
 # ==========================================
 # [Page 3] 매크로 상관관계
@@ -1270,7 +1270,7 @@ with tab3:
     apply_title_and_legend(fig, None, height=600)
     fig.update_yaxes(title_text="미국 국채 10년 (%)", secondary_y=False)
     fig.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
 # ==========================================
 # [Page 4] 미국 국채 장기 추이
@@ -1285,7 +1285,7 @@ with tab4:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_selected.index, y=df_selected.values, name=selected_bond, line=dict(color='#ff7f0e', width=2)))
         fig.update_layout(title=f"<b>미국 국채 {selected_bond} 금리</b> (현재: {latest_yield:.3f}%)", height=500, margin=dict(l=20, r=20, t=40, b=20), yaxis_title="수익률 (%)", xaxis_title="연도")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
 # ==========================================
 # [Page 5] 반도체(D램) 가격 추이
@@ -1350,7 +1350,7 @@ with tab5:
             ))
         apply_title_and_legend(fig, "<b>D램 현물 평균가(Session Average) 추이</b>", height=500)
         fig.update_yaxes(title_text="가격")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
         with st.expander("SKU 7종 전체 원본 데이터 보기"):
             st.dataframe(df_dram, use_container_width=True)
@@ -1444,7 +1444,7 @@ with tab6:
             title_text="괴리율 (%)", ticksuffix="%",
             range=disp_range, tickvals=(disp_ticks or None), secondary_y=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
         # 범례 설명 표시
         st.markdown("""
@@ -1568,7 +1568,7 @@ with tab7:
                 )
                 fig.update_yaxes(title_text="수출 증가율 (%)", secondary_y=False)
                 fig.update_yaxes(title_text="코스피 (pt)", tickformat=",", secondary_y=True)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
             else:
                 df_chart = df_export
@@ -1587,7 +1587,7 @@ with tab7:
                     bargap=0.1,
                 )
                 fig.update_yaxes(tickformat=",")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
     else:
         st.warning("구글 시트 수출 데이터를 불러오지 못했습니다. '파일 -> 공유 -> 웹에 게시(CSV)' 링크를 확인해주세요.")
 
@@ -1749,7 +1749,7 @@ with tab8:
                                 mode="lines", line=dict(color="#4f46e5", width=2),
                             ))
                             fig.update_layout(height=420, margin=dict(l=20, r=20, t=30, b=20))
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
                             st.dataframe(df_series[["TIME", "DATA_VALUE"]], use_container_width=True, hide_index=True)
 
 # ==========================================
@@ -1779,7 +1779,7 @@ with tab9:
         col_gauge, col_panel = st.columns([1.3, 1])
 
         with col_gauge:
-            st.plotly_chart(render_fng_gauge(score), use_container_width=True)
+            st.plotly_chart(render_fng_gauge(score), use_container_width=True, config={'scrollZoom': False})
             st.markdown(
                 f"<div style='text-align:center; margin-top:-15px;'>"
                 f"<span style='font-size:22px; font-weight:700; color:{rating_color};'>{rating_kr.upper()}</span>"
@@ -1872,7 +1872,7 @@ with tab9:
             apply_title_and_legend(fig9, None, height=420, **CHART9_SIDE)
             fig9.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=False)
             fig9.update_xaxes(range=x_range_9)
-            st.plotly_chart(fig9, use_container_width=True)
+            st.plotly_chart(fig9, use_container_width=True, config={'scrollZoom': False})
 
             # 선택 구간 요약 통계 (투자 참고용)
             if len(df_plot9) > 0:
@@ -1934,7 +1934,7 @@ with tab9:
                 fig_vix.update_yaxes(title_text="VIX", secondary_y=False)
                 fig_vix.update_yaxes(title_text="Fear & Greed Score", range=[0, 100], secondary_y=True)
                 fig_vix.update_xaxes(range=x_range_9)
-                st.plotly_chart(fig_vix, use_container_width=True)
+                st.plotly_chart(fig_vix, use_container_width=True, config={'scrollZoom': False})
 
                 col_v1, col_v2, col_v3 = st.columns(3)
                 col_v1.metric("현재 VIX", f"{latest_vix:.1f}")
@@ -2030,7 +2030,7 @@ with tab10:
                 height=440, title_size=13,
             )
             fig.update_yaxes(title_text="50일선 상회 비율 (%)", range=[0, 100], secondary_y=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
             col_m1, col_m2, col_m3 = st.columns(3)
             col_m1.metric("현재", f"{latest_val:.1f}%")
