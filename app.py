@@ -290,6 +290,57 @@ def get_market_data(start_date_str):
                 data[name] = pd.DataFrame({'Close': close, 'DD': dd})
     return data
 
+
+# ---------------------------------------------------------------------------
+# Page 1 부가 기능 — 지수별 하락 빈도(몇 년에 한 번씩 -X% 낙폭이 오는지)
+# ---------------------------------------------------------------------------
+# "N년당 1회" 계산 방식: 전고점(사상 최고 종가) 갱신 시점을 기준으로 데이터를
+# 구간(episode)으로 나눕니다 — 한 구간은 "어느 전고점"부터 "그 다음 새 전고점을
+# 찍기 직전"까지입니다. 각 구간에서 도달한 최대 낙폭(trough)이 기준선(-10%~-30%)을
+# 넘었으면 그 구간을 1회로 집계합니다.
+# 이렇게 구간 단위로 세는 이유: 하나의 긴 하락장(예: 2008년 금융위기) 동안 지수가
+# -10%, -15%, -20% 선을 오르내리며 여러 번 넘나들 수 있는데, 이를 매번 별도
+# 사건으로 세면(=일별 교차 카운트) 같은 하락장이 수십 번으로 중복 집계되어
+# "몇 년에 한 번"이라는 체감과 맞지 않게 됩니다. 전고점 경신 전까지는 아직
+# 같은 하락 국면이 이어지는 것으로 보고 하나로 묶습니다.
+# 전체 데이터 기간(년) ÷ 발생 횟수 = 평균 몇 년에 한 번 오는지.
+DD_FREQ_TICKERS = {"S&P 500": "^GSPC", "코스피": "^KS11"}
+DD_FREQ_THRESHOLDS = [10, 15, 20, 25, 30]
+DD_FREQ_START = "1990-01-01"  # 야후 파이낸스가 제공하는 최대한 이른 시점부터 조회
+
+
+@st.cache_data(ttl=3600)
+def get_drawdown_frequency_data():
+    """지수별로 [10,15,20,25,30]% 낙폭 발생 횟수 및 평균 주기(년)를 계산합니다."""
+    rows = []
+    for name, ticker in DD_FREQ_TICKERS.items():
+        df = yf.download(ticker, start=DD_FREQ_START, progress=False)
+        if df.empty:
+            continue
+        close = df['Close'] if not isinstance(df.columns, pd.MultiIndex) else df['Close'].iloc[:, 0]
+        close = close.dropna()
+        if len(close) < 2:
+            continue
+        dd = (close / close.cummax() - 1) * 100
+        n_years = (close.index[-1] - close.index[0]).days / 365.25
+
+        # 전고점 경신일(=사상 최고 종가를 새로 찍은 날)마다 새 구간을 시작
+        is_new_high = (close >= close.cummax())
+        episode_id = is_new_high.cumsum()
+        trough_per_episode = dd.groupby(episode_id).min()
+
+        row = {
+            "지수": name,
+            "데이터 시작일": close.index[0].strftime("%Y-%m-%d"),
+            "기간(년)": n_years,
+        }
+        for th in DD_FREQ_THRESHOLDS:
+            events = int((trough_per_episode <= -th).sum())
+            row[f"_{th}_count"] = events
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 @st.cache_data(ttl=3600)
 def get_fx_long_data(tickers_dict, start_date_str):
     data = {}
@@ -1098,47 +1149,75 @@ with tab_home:
 # [Page 1] 주가지수 화면
 # ==========================================
 with tab1:
-    st.subheader("글로벌 주요 주가지수 일반 지수 & MDD 추이")
-    st.caption(
-        "📐 축 읽는 법 — 오른쪽 **MDD 축은 기간 버튼과 무관하게 항상 0% ~ -100%로 고정**되어 있어, "
-        "어떤 기간·어떤 지수를 봐도 회색선의 높이가 같은 낙폭을 의미합니다. "
-        "왼쪽 지수 축은 위쪽에 여백을 둬서 지수선이 플롯 아래 60% 안에서만 움직이도록 했습니다 — "
-        "지수가 직전 최고점에 있어도 0% 근처의 MDD선과 겹치지 않게 하기 위함입니다."
-    )
-    col_p1, col_s1 = st.columns([2, 1])
-    with col_p1:
-        period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
-    with col_s1:
-        scale_option_1 = st.radio("차트 축 스케일 선택:", ["선형 축 (Linear)", "로그 축 (Log)"], index=0, horizontal=True, key="m_s1")
+    with st.expander("📈 글로벌 주요 주가지수 일반 지수 & MDD 추이", expanded=True):
+        st.caption(
+            "📐 축 읽는 법 — 오른쪽 **MDD 축은 기간 버튼과 무관하게 항상 0% ~ -100%로 고정**되어 있어, "
+            "어떤 기간·어떤 지수를 봐도 회색선의 높이가 같은 낙폭을 의미합니다. "
+            "왼쪽 지수 축은 위쪽에 여백을 둬서 지수선이 플롯 아래 60% 안에서만 움직이도록 했습니다 — "
+            "지수가 직전 최고점에 있어도 0% 근처의 MDD선과 겹치지 않게 하기 위함입니다."
+        )
+        col_p1, col_s1 = st.columns([2, 1])
+        with col_p1:
+            period_option_1 = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"], index=0, horizontal=True, key="m_p1")
+        with col_s1:
+            scale_option_1 = st.radio("차트 축 스케일 선택:", ["선형 축 (Linear)", "로그 축 (Log)"], index=0, horizontal=True, key="m_s1")
 
-    start_date_1 = get_start_date(period_option_1)
-    market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
-    is_log_scale = "로그" in scale_option_1
+        start_date_1 = get_start_date(period_option_1)
+        market_data = get_market_data(start_date_1.strftime("%Y-%m-%d"))
+        is_log_scale = "로그" in scale_option_1
 
-    cols1 = st.columns(2)
-    for idx, (name, df_m) in enumerate(market_data.items()):
-        with cols1[idx % 2]:
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(go.Scatter(x=df_m.index, y=df_m['Close'], name="지수", line=dict(width=2)), secondary_y=False)
-            fig.add_trace(go.Scatter(x=df_m.index, y=df_m['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
-            latest_close = df_m['Close'].iloc[-1]
-            latest_dd = df_m['DD'].iloc[-1]
-            ytd_title_part = ""
-            if period_option_1 == "YTD":
-                ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
-                c_name = "red" if ytd_val >= 0 else "blue"
-                ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
-            fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=340, showlegend=False)
-            # 지수 축: 최고점이 플롯 높이 60% 지점에 오도록 위쪽 여백 확보 (MDD선과 분리)
-            fig.update_yaxes(
-                title_text="지수 (pt)",
-                type="log" if is_log_scale else "linear",
-                range=price_axis_range(df_m['Close'], log=is_log_scale),
-                secondary_y=False,
-            )
-            # MDD 축: 항상 0% ~ -100% 고정
-            apply_dd_axis(fig)
-            st.plotly_chart(fig, use_container_width=True)
+        cols1 = st.columns(2)
+        for idx, (name, df_m) in enumerate(market_data.items()):
+            with cols1[idx % 2]:
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+                fig.add_trace(go.Scatter(x=df_m.index, y=df_m['Close'], name="지수", line=dict(width=2)), secondary_y=False)
+                fig.add_trace(go.Scatter(x=df_m.index, y=df_m['DD'], name="Drawdown %", line=dict(color='gray', width=1)), secondary_y=True)
+                latest_close = df_m['Close'].iloc[-1]
+                latest_dd = df_m['DD'].iloc[-1]
+                ytd_title_part = ""
+                if period_option_1 == "YTD":
+                    ytd_val = ((latest_close / df_m['Close'].iloc[0]) - 1) * 100
+                    c_name = "red" if ytd_val >= 0 else "blue"
+                    ytd_title_part = f" | YTD: <span style='color:{c_name};'>{ytd_val:+.2f}%</span>"
+                fig.update_layout(title=f"<b>{name}</b> ({latest_close:,.2f}) | DD: {latest_dd:+.2f}%{ytd_title_part}", margin=dict(l=20, r=20, t=40, b=20), height=340, showlegend=False)
+                # 지수 축: 최고점이 플롯 높이 60% 지점에 오도록 위쪽 여백 확보 (MDD선과 분리)
+                fig.update_yaxes(
+                    title_text="지수 (pt)",
+                    type="log" if is_log_scale else "linear",
+                    range=price_axis_range(df_m['Close'], log=is_log_scale),
+                    secondary_y=False,
+                )
+                # MDD 축: 항상 0% ~ -100% 고정
+                apply_dd_axis(fig)
+                st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("📉 지수별 하락 빈도 (S&P 500 · 코스피)", expanded=False):
+        st.caption(
+            "전고점 대비 낙폭이 각 기준선(-10%~-30%)을 처음 아래로 뚫는 시점만 1회로 집계합니다. "
+            "같은 하락 국면에서 낙폭이 기준선 근처를 오르내려도 중복으로 세지 않고, "
+            "더 깊어져 다음 기준선을 새로 뚫으면 그건 별도로 셉니다. "
+            f"(데이터 시작: {DD_FREQ_START} ~ 현재, 야후 파이낸스 기준)"
+        )
+        df_freq = get_drawdown_frequency_data()
+        if df_freq.empty:
+            st.warning("하락 빈도 데이터를 불러오지 못했습니다.")
+        else:
+            display_rows = []
+            for _, r in df_freq.iterrows():
+                n_years = r["기간(년)"]
+                row = {
+                    "지수": r["지수"],
+                    "데이터 기간": f"{r['데이터 시작일']} ~ 현재 (약 {n_years:.1f}년)",
+                }
+                for th in DD_FREQ_THRESHOLDS:
+                    cnt = int(r[f"_{th}_count"])
+                    if cnt > 0:
+                        years_per_event = n_years / cnt
+                        row[f"-{th}% 이상"] = f"{cnt}회 · 약 {years_per_event:.1f}년마다"
+                    else:
+                        row[f"-{th}% 이상"] = "발생 없음"
+                display_rows.append(row)
+            st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
 
 # ==========================================
 # [Page 2] 환율 & 원자재 화면
