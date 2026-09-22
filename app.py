@@ -9,6 +9,7 @@ import requests
 import io
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 # ---------------------------------------------------------------------------
 # KRX 로그인 자격증명 주입 — 반드시 pykrx 임포트 "앞"에 있어야 합니다
@@ -414,6 +415,49 @@ def get_us_bonds_data():
             df = df['Close'] if isinstance(df.columns, pd.MultiIndex) else df[['Close']]
             data[name] = df.iloc[:, 0]
     return data
+
+# ---------------------------------------------------------------------------
+# Page 4 — 미국 재무부 공식 일별 금리 곡선 (2년물이 필요한 10Y-2Y 스프레드용)
+# ---------------------------------------------------------------------------
+# yfinance에는 2년물 금리 지수가 없습니다(^FVX 5년·^TNX 10년·^TYX 30년뿐).
+# FRED의 T10Y2Y를 쓰려 했으나 이 환경에서 fred.stlouisfed.org 접속이 막혀 있어,
+# FRED가 T10Y2Y를 산출하는 원천인 재무부 일별 금리 곡선을 직접 받아 씁니다.
+# 전체 기간 일괄 조회 엔드포인트는 403이라 연도별로 1회씩 받아야 해서 병렬로 처리합니다.
+TREASURY_CURVE_URL = (
+    "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/"
+    "daily-treasury-rates.csv/{year}/all?type=daily_treasury_yield_curve"
+    "&field_tdr_date_value={year}&page&_format=csv"
+)
+TREASURY_CURVE_START_YEAR = 1990  # 재무부가 2년물을 제공하기 시작하는 시점
+
+
+@st.cache_data(ttl=86400, show_spinner="미국 재무부 일별 금리 곡선을 불러오는 중입니다...")
+def get_treasury_curve_data():
+    """재무부 공식 일별 금리 곡선에서 2년물·10년물을 뽑아옵니다. 반환: (DataFrame, error)"""
+    years = list(range(TREASURY_CURVE_START_YEAR, datetime.date.today().year + 1))
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+
+    def fetch_year(year):
+        try:
+            res = requests.get(TREASURY_CURVE_URL.format(year=year), headers=headers, timeout=30)
+            res.raise_for_status()
+            return pd.read_csv(io.StringIO(res.text))
+        except Exception:
+            # 특정 연도만 실패해도 나머지로 그릴 수 있게 조용히 건너뜀
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        frames = [f for f in pool.map(fetch_year, years) if f is not None and {"2 Yr", "10 Yr"}.issubset(f.columns)]
+
+    if not frames:
+        return pd.DataFrame(), "재무부 금리 곡선을 한 해도 받지 못했습니다."
+
+    df = pd.concat(frames, ignore_index=True)
+    df["Date"] = pd.to_datetime(df["Date"], format="%m/%d/%Y", errors="coerce")
+    df = df[["Date", "2 Yr", "10 Yr"]].dropna().set_index("Date").sort_index()
+    return df.rename(columns={"2 Yr": "2Y", "10 Yr": "10Y"}), None
+
 
 @st.cache_data(ttl=3600)
 def get_dram_csv_data():
@@ -1357,31 +1401,36 @@ with tab4:
     fig.update_xaxes(title_text="연도")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
-    # 장단기 금리차(10Y-5Y) — 단기물이 정책금리에 민감하게 움직이는 반면 장기물은
-    # 장기 성장·물가 기대치를 반영해 상대적으로 완만하다는, 위에서 나눈 얘기를
-    # 그대로 숫자화한 보조 지표. 0% 아래(역전)는 흔히 경기침체 선행 신호로 해석됨.
-    if "10년물" in bonds_data and "5년물" in bonds_data:
-        spread_df = pd.concat({"10y": bonds_data["10년물"], "5y": bonds_data["5년물"]}, axis=1).dropna()
-        spread = spread_df["10y"] - spread_df["5y"]
+    # 장단기 금리차(10Y-2Y) — FRED의 T10Y2Y와 같은 정의. 단기물이 정책금리에 민감하게
+    # 움직이는 반면 장기물은 장기 성장·물가 기대치를 반영해 완만하다는 비대칭을
+    # 숫자화한 지표로, 0% 아래(역전)는 흔히 경기침체 선행 신호로 해석됨.
+    df_curve, curve_err = get_treasury_curve_data()
+    if df_curve.empty:
+        st.warning(f"장단기 금리차를 불러오지 못했습니다 — {curve_err}")
+    else:
+        spread = (df_curve["10Y"] - df_curve["2Y"]).dropna()
         latest_spread = spread.iloc[-1]
         inverted_note = " ⚠️ 역전 중" if latest_spread < 0 else ""
 
         st.caption(
-            "📐 장단기 금리차(10년물 - 5년물) — 단기물은 연준 정책금리에 민감하게 반응해 변동폭이 크고, "
-            "장기물은 장기 성장·물가 기대를 반영해 상대적으로 완만하게 움직입니다. "
-            "스프레드가 0% 아래로 내려가면(장단기 역전) 통상 경기침체 선행 신호로 해석됩니다."
+            "📐 장단기 금리차(10년물 - 2년물) — FRED의 **T10Y2Y**와 같은 정의입니다. "
+            "단기물은 연준 정책금리에 민감하게 반응해 변동폭이 크고, 장기물은 장기 성장·물가 기대를 "
+            "반영해 상대적으로 완만하게 움직입니다. 0% 아래로 내려가면(장단기 역전) 통상 경기침체 "
+            "선행 신호로 해석됩니다. (2년물은 yfinance에 없어 FRED가 T10Y2Y를 산출하는 원천인 "
+            "[미국 재무부 일별 금리 곡선](https://home.treasury.gov/resource-center/data-chart-center/interest-rates/"
+            "TextView?type=daily_treasury_yield_curve)을 직접 사용, 1990년~현재)"
         )
         fig_spread = go.Figure()
         fig_spread.add_trace(go.Scatter(
-            x=spread.index, y=spread.values, name="10Y - 5Y",
+            x=spread.index, y=spread.values, name="10Y - 2Y",
             line=dict(color="#7f3fbf", width=2),
             fill="tozeroy", fillcolor="rgba(127,63,191,0.12)",
         ))
         fig_spread.add_hline(y=0, line_dash="dot", line_color="rgba(200,50,50,0.6)", line_width=1.5)
         apply_title_and_legend(
             fig_spread,
-            f"<b>장단기 금리차 (10Y - 5Y)</b> (현재: {latest_spread:+.3f}%p{inverted_note})",
-            height=280,
+            f"<b>장단기 금리차 (10Y - 2Y)</b> (현재: {latest_spread:+.2f}%p{inverted_note})",
+            height=320,
         )
         fig_spread.update_yaxes(title_text="스프레드 (%p)")
         fig_spread.update_xaxes(title_text="연도")
