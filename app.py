@@ -1291,6 +1291,36 @@ with tab4:
     fig.update_xaxes(title_text="연도")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
+    # 장단기 금리차(10Y-5Y) — 단기물이 정책금리에 민감하게 움직이는 반면 장기물은
+    # 장기 성장·물가 기대치를 반영해 상대적으로 완만하다는, 위에서 나눈 얘기를
+    # 그대로 숫자화한 보조 지표. 0% 아래(역전)는 흔히 경기침체 선행 신호로 해석됨.
+    if "10년물" in bonds_data and "5년물" in bonds_data:
+        spread_df = pd.concat({"10y": bonds_data["10년물"], "5y": bonds_data["5년물"]}, axis=1).dropna()
+        spread = spread_df["10y"] - spread_df["5y"]
+        latest_spread = spread.iloc[-1]
+        inverted_note = " ⚠️ 역전 중" if latest_spread < 0 else ""
+
+        st.caption(
+            "📐 장단기 금리차(10년물 - 5년물) — 단기물은 연준 정책금리에 민감하게 반응해 변동폭이 크고, "
+            "장기물은 장기 성장·물가 기대를 반영해 상대적으로 완만하게 움직입니다. "
+            "스프레드가 0% 아래로 내려가면(장단기 역전) 통상 경기침체 선행 신호로 해석됩니다."
+        )
+        fig_spread = go.Figure()
+        fig_spread.add_trace(go.Scatter(
+            x=spread.index, y=spread.values, name="10Y - 5Y",
+            line=dict(color="#7f3fbf", width=2),
+            fill="tozeroy", fillcolor="rgba(127,63,191,0.12)",
+        ))
+        fig_spread.add_hline(y=0, line_dash="dot", line_color="rgba(200,50,50,0.6)", line_width=1.5)
+        apply_title_and_legend(
+            fig_spread,
+            f"<b>장단기 금리차 (10Y - 5Y)</b> (현재: {latest_spread:+.3f}%p{inverted_note})",
+            height=280,
+        )
+        fig_spread.update_yaxes(title_text="스프레드 (%p)")
+        fig_spread.update_xaxes(title_text="연도")
+        st.plotly_chart(fig_spread, use_container_width=True, config={'scrollZoom': False})
+
 # ==========================================
 # [Page 5] 반도체(D램) 가격 추이
 # ==========================================
