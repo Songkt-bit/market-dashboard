@@ -65,6 +65,26 @@ except Exception as e:
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
 st.title("📊 Daily Market & Macro Dashboard")
 
+# 탭이 11개(+Page 8 내부 2개)로 늘어나면서 한 줄에 다 안 들어가 가로 스크롤이 생기는
+# 문제를 CSS로 줄바꿈(wrap) 처리해 해결. 스크롤 대신 탭이 2~3줄로 나뉘어 표시됨.
+# (Streamlit 최신 버전은 탭을 BaseWeb이 아니라 react-aria 기반 [role="tablist"]로
+# 렌더링하므로 data-baseweb 셀렉터가 아니라 이 쪽을 타겟해야 함)
+st.markdown(
+    """
+    <style>
+    div[data-testid="stTabs"] [role="tablist"] {
+        flex-wrap: wrap !important;
+        overflow-x: visible !important;
+        row-gap: 4px;
+    }
+    div[data-testid="stTabs"] [data-testid="stTab"] {
+        white-space: nowrap;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # 2. 데이터 대상 정의
 INDICES = {
     "코스피": "^KS11", "코스닥": "^KQ11", "S&P 500": "^GSPC",
