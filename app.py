@@ -427,6 +427,70 @@ def get_dram_csv_data():
     except:
         return pd.DataFrame()
 
+# ---------------------------------------------------------------------------
+# Page 5 — D램 고정거래가격(DDR4 8Gb 1Gx8) 월별 장기 추이 (하드코딩)
+# ---------------------------------------------------------------------------
+# 구글 시트 연동 데이터는 우리가 추적을 시작한 시점부터라 기간이 며칠뿐입니다.
+# 그 이전 구간은 TrendForce/DRAMeXchange 집계치를 인용한 공개 보도자료·언론
+# 기사의 값을 월별로 직접 박아 넣어 장기 흐름을 볼 수 있게 했습니다.
+#
+# ※ 중요 — 여기 값은 '고정거래가격(contract)'으로, 시트의 '현물가(spot)'와는
+#   다른 지표입니다. 통상 contract < spot이고 공급부족기에는 spot이 contract보다
+#   50~100% 높게 형성되기 때문에 두 계열을 한 선으로 이으면 안 됩니다.
+#   그래서 현물가 차트와 별도 차트로 분리해 그립니다.
+#
+# ※ DDR3 4Gb / DDR5 16Gb는 chip 단위 과거 시세의 공개 자료가 거의 없거나
+#   (DDR3) 현물가·계약가·모듈가가 뒤섞여 있어(DDR5) 하드코딩 대상에서 제외했습니다.
+#
+# 각 항목 = (YYYY-MM, USD, 역산값 여부)
+#   역산값 = 보도된 전월 대비 변동률을 보도된 인접 월 실측치에 1단계만 적용해 계산한 값
+# 출처: 이데일리·서울경제·ZDNet Korea·이투데이·아주경제·파이낸셜뉴스·아시아경제·
+#       머니투데이·서울신문 등이 인용한 TrendForce/DRAMeXchange PC용 범용 D램 집계치
+DRAM_DDR4_CONTRACT_HISTORY = [
+    ("2016-06", 2.90, False),
+    ("2018-09", 8.19, False),   # 직전 슈퍼사이클 정점
+    ("2019-08", 2.94, False),
+    ("2020-07", 3.13, False),
+    ("2020-08", 3.13, False),
+    ("2021-05", 3.80, False),
+    ("2021-10", 3.71, False),
+    ("2022-06", 3.35, False),
+    ("2022-07", 2.88, False),
+    ("2023-05", 1.40, False),   # 23개월 연속 하락 국면
+    ("2023-10", 1.50, False),   # 27개월 만의 첫 반등
+    ("2024-04", 2.10, False),
+    ("2024-07", 2.10, False),
+    ("2025-03", 1.35, False),   # 직전 사이클 저점
+    ("2025-04", 1.65, False),
+    ("2025-05", 2.10, True),
+    ("2025-06", 2.60, True),
+    ("2025-07", 3.90, False),
+    ("2025-08", 5.70, False),
+    ("2025-09", 7.00, False),
+    ("2025-10", 7.78, True),
+    ("2025-11", 8.10, False),   # 7년 2개월 만에 8달러 돌파
+    ("2025-12", 9.30, False),   # 사상 첫 9달러
+    ("2026-01", 11.50, False),
+    ("2026-02", 13.00, False),
+    ("2026-03", 13.00, False),
+    ("2026-04", 16.00, False),
+    ("2026-05", 20.00, False),
+    ("2026-06", 21.00, True),
+    ("2026-07", 24.00, False),
+    ("2026-08", 25.00, False),
+]
+
+
+def get_dram_contract_history_df():
+    """하드코딩된 월별 고정거래가격을 빈 달이 비어 있는 채로(NaN) 월별 인덱스에 올립니다.
+    자료가 없는 구간을 직선으로 이어버리면 없는 데이터를 있는 것처럼 보이게 되므로,
+    차트에서 connectgaps=False로 끊어 그리기 위함입니다."""
+    df = pd.DataFrame(DRAM_DDR4_CONTRACT_HISTORY, columns=["Month", "Price", "Derived"])
+    df["Date"] = pd.to_datetime(df["Month"] + "-01")
+    df = df.set_index("Date").drop(columns="Month")
+    return df.reindex(pd.date_range(df.index.min(), df.index.max(), freq="MS"))
+
+
 def parse_dram_pct_change(s):
     """구글 시트의 'Avg Change'/'Low Change' 컬럼(예: '▲13.04 %', '▼2.10 %')을 부호 있는 float로 변환"""
     if pd.isna(s):
@@ -1345,6 +1409,49 @@ with tab4:
 # [Page 5] 반도체(D램) 가격 추이
 # ==========================================
 with tab5:
+    with st.expander("📅 D램 고정거래가격(DDR4 8Gb) 장기 추이 — 월별", expanded=True):
+        st.caption(
+            "구글 시트 연동(현물가)은 추적 시작 이후 며칠치뿐이라, 그 이전 장기 흐름은 "
+            "언론·보도자료에 인용된 TrendForce/DRAMeXchange **고정거래가격(contract)** 값을 "
+            "월별로 하드코딩해 그렸습니다. 아래 현물가(spot) 차트와는 **지표가 달라** "
+            "(통상 contract < spot, 공급부족기엔 spot이 50~100% 높음) 일부러 선을 잇지 않고 분리했습니다. "
+            "자료가 없는 달은 빈 구간으로 두었고(보간하지 않음), 점선 마커는 보도된 변동률로 역산한 값입니다."
+        )
+        df_contract = get_dram_contract_history_df()
+        known = df_contract.dropna(subset=["Price"])
+
+        fig_hist = go.Figure()
+        fig_hist.add_trace(go.Scatter(
+            x=df_contract.index, y=df_contract["Price"],
+            name="DDR4 8Gb 고정거래가", mode="lines+markers",
+            line=dict(color="#ff7f0e", width=2), marker=dict(size=6),
+            connectgaps=False,
+        ))
+        # 역산값은 위에 한 겹 덧그려서 실측치와 구분
+        derived = known[known["Derived"] == True]  # noqa: E712 (NaN 행이 섞여 있어 is True 불가)
+        if not derived.empty:
+            fig_hist.add_trace(go.Scatter(
+                x=derived.index, y=derived["Price"],
+                name="역산값(보도 변동률 기반)", mode="markers",
+                marker=dict(size=9, color="white", line=dict(color="#ff7f0e", width=2)),
+            ))
+        latest_contract = known.iloc[-1]
+        apply_title_and_legend(
+            fig_hist,
+            f"<b>PC용 범용 D램(DDR4 8Gb) 고정거래가격</b> "
+            f"(최신: {latest_contract.name.strftime('%Y-%m')} ${latest_contract['Price']:,.2f})",
+            height=420,
+        )
+        fig_hist.update_yaxes(title_text="고정거래가격 ($)")
+        fig_hist.update_xaxes(title_text="연월")
+        st.plotly_chart(fig_hist, use_container_width=True, config={'scrollZoom': False})
+
+        with st.expander("월별 원본 값 보기 (CSV 다운로드)"):
+            table = known.copy()
+            table.index = table.index.strftime("%Y-%m")
+            table = table.rename(columns={"Price": "고정거래가($)", "Derived": "역산값"})
+            st.dataframe(table, use_container_width=True)
+
     st.subheader("💾 D램 현물 가격 추이 (세대별 대표 SKU · 구글 시트 연동)")
     st.info("💡 구글 시트에 실시간 연동된 D램 세션 평균가를 세대별(DDR5/DDR4/DDR3) 대표 SKU 기준으로 시각화합니다.")
     df_dram = get_dram_csv_data()
