@@ -9,6 +9,7 @@ import requests
 import io
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 # ---------------------------------------------------------------------------
@@ -1164,9 +1165,18 @@ KRX_OPENAPI_401_HELP = (
     "활용신청이 **둘 다 관리자 승인**까지 끝나야 조회됩니다 — openapi.krx.co.kr의 "
     "마이페이지에서 승인 상태를 확인해주세요. (키 오타일 수도 있습니다)"
 )
+KRX_OPENAPI_403_HELP = (
+    "KRX 방화벽이 요청을 차단했습니다(403). 하루치씩만 조회되는 API라 요청 수가 많아 "
+    "생기는 현상으로, 잠시 후 다시 열면 재시도합니다. 계속 반복되면 조회 기간을 "
+    "줄여야 합니다."
+)
 # 하루 = 요청 1회라, 기간이 길수록 요청이 선형으로 늘어납니다. 첫 로딩 비용을
 # 억제하려고 조회 구간을 1년으로 제한합니다(약 245영업일).
 VKOSPI_MAX_DAYS = 365
+# 8병렬로 260건을 한 번에 쏘니 KRX 앞단에서 403으로 끊겼습니다. 동시성을 낮추고
+# 요청마다 간격을 둬서 통과시킵니다 (1년치 ≈ 260건 × 0.2초 ÷ 2 ≈ 30초, 하루 캐시).
+KRX_OPENAPI_WORKERS = 2
+KRX_OPENAPI_DELAY = 0.2
 
 
 def _krx_openapi_key() -> str:
@@ -1215,23 +1225,33 @@ def _fetch_vkospi(start_date_str: str, key: str):
         today - datetime.timedelta(days=VKOSPI_MAX_DAYS),
     )
     days = pd.bdate_range(start, today)
-    headers = {"AUTH_KEY": key, "User-Agent": "Mozilla/5.0"}
+    headers = {
+        "AUTH_KEY": key,
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+        "Accept": "application/json",
+    }
 
     def fetch_day(day):
+        # KRX 앞단 방화벽이 짧은 시간의 요청 폭주를 403으로 끊습니다. 하루치씩만
+        # 조회되는 API라 요청 수 자체는 줄일 수 없어, 속도를 낮춰서 통과시킵니다.
+        time.sleep(KRX_OPENAPI_DELAY)
         try:
             res = requests.get(KRX_OPENAPI_URL, params={"basDd": day.strftime("%Y%m%d")},
                                headers=headers, timeout=20)
             if res.status_code == 401:
                 return day, None, KRX_OPENAPI_401_HELP
+            if res.status_code == 403:
+                return day, None, KRX_OPENAPI_403_HELP
             if res.status_code != 200:
-                return day, None, f"HTTP {res.status_code}: {res.text[:200]}"
+                return day, None, f"HTTP {res.status_code}: {res.text[:150]}"
             rows = res.json().get("OutBlock_1") or []
         except Exception as e:
             return day, None, f"{type(e).__name__}: {e}"
         return day, rows, None
 
     values, names, errors = {}, set(), []
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=KRX_OPENAPI_WORKERS) as pool:
         for day, rows, err in pool.map(fetch_day, days):
             if err:
                 errors.append(err)
