@@ -1134,6 +1134,57 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
 
 
 @st.cache_data(ttl=3600)
+# ---------------------------------------------------------------------------
+# VKOSPI (코스피200 변동성지수) — Page 9
+# ---------------------------------------------------------------------------
+# VIX와 달리 야후 파이낸스에 VKOSPI 지수가 없습니다(^VKOSPI 등 어떤 표기로도 빈 응답).
+# 네이버 금융·stooq도 막혀 있어서, 현실적으로 KRX가 유일한 공개 경로입니다.
+# KRX는 2025-12-27부터 회원제라 로그인이 필요합니다 — Page 10 코스피200과 같은
+# KRX_ID/KRX_PW 설정을 그대로 쓰고, 없으면 같은 안내(KRX_LOGIN_HELP)를 띄웁니다.
+#
+# 지수 코드를 상수로 박지 않고 이름으로 찾는 이유: KRX 지수 코드는 공개 문서가 없어
+# 잘못된 코드를 박아두면 조용히 엉뚱한 지수를 그리게 됩니다. 이름에 '변동성'이 들어간
+# 지수를 KOSPI 계열에서 찾아 쓰고, 못 찾으면 실패를 드러냅니다.
+@st.cache_data(ttl=86400)
+def find_vkospi_ticker():
+    """KOSPI 계열 지수 중 이름에 '변동성'이 들어간 지수의 티커. 반환: (ticker, name, error)"""
+    try:
+        for market in ("KOSPI", "KRX"):
+            for ticker in pykrx_stock.get_index_ticker_list(market=market):
+                name = pykrx_stock.get_index_ticker_name(ticker)
+                if "변동성" in str(name):
+                    return ticker, name, None
+    except Exception as e:
+        return None, None, f"{type(e).__name__}: {e}"
+    return None, None, "KRX 지수 목록에서 변동성지수를 찾지 못했습니다."
+
+
+@st.cache_data(ttl=3600)
+def get_vkospi_data(start_date_str: str):
+    """VKOSPI 일별 종가. 반환: (Series, 지수명, error)"""
+    if not PYKRX_AVAILABLE:
+        return pd.Series(dtype=float), None, f"pykrx 임포트 실패: {PYKRX_IMPORT_ERROR}"
+    if not KRX_LOGIN_CONFIGURED:
+        return pd.Series(dtype=float), None, KRX_LOGIN_HELP
+
+    ticker, name, err = find_vkospi_ticker()
+    if not ticker:
+        return pd.Series(dtype=float), None, err
+
+    try:
+        df = pykrx_stock.get_index_ohlcv(
+            start_date_str.replace("-", ""),
+            datetime.date.today().strftime("%Y%m%d"),
+            ticker,
+        )
+    except Exception as e:
+        return pd.Series(dtype=float), name, f"{type(e).__name__}: {e}"
+
+    if df is None or df.empty or "종가" not in df.columns:
+        return pd.Series(dtype=float), name, "VKOSPI 응답이 비어 있습니다 (휴장일이거나 KRX 조회 실패)."
+    return pd.to_numeric(df["종가"], errors="coerce").dropna(), name, None
+
+
 def get_single_index_close(ticker: str, start_date_str: str):
     """오버레이용 단일 지수 종가 (S&P500/코스피 자체 지수)"""
     df = yf.download(ticker, start=start_date_str, progress=False)
@@ -2125,6 +2176,55 @@ with tab9:
                 col_v1.metric("현재 VIX", f"{latest_vix:.1f}")
                 col_v2.metric("선택 구간 평균", f"{df_vix.mean():.1f}")
                 col_v3.metric("선택 구간 최고", f"{df_vix.max():.1f}")
+
+            st.divider()
+
+            # ---- VKOSPI(코스피200 변동성지수) + 코스피 오버레이 ----
+            # 위 VIX 차트와 같은 기간·여백을 써서 미국/한국 변동성을 나란히 대조합니다.
+            st.markdown("### 🇰🇷 VKOSPI(코스피200 변동성지수) 추이")
+            st.caption(
+                "VKOSPI는 코스피200 옵션 가격에서 역산한 변동성 지수로, 한국판 VIX입니다. "
+                "코스피 지수를 우측 축에 겹쳐 그렸습니다 — **범례를 클릭하면 해당 선을 숨기거나 다시 표시**할 수 있습니다. "
+                "변동성지수는 지수가 급락할 때 치솟는 역상관 관계를 보이는 것이 일반적입니다."
+            )
+
+            vkospi, vkospi_name, vkospi_err = get_vkospi_data(start_date_9.strftime("%Y-%m-%d"))
+            if vkospi.empty:
+                st.warning(f"VKOSPI 데이터를 불러오지 못했습니다 — {vkospi_err}")
+            else:
+                latest_vk = vkospi.iloc[-1]
+                kospi9 = get_single_index_close("^KS11", start_date_9.strftime("%Y-%m-%d"))
+
+                fig_vk = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_vk.add_hrect(y0=30, y1=max(float(vkospi.max()), 30) + 5,
+                                 fillcolor="rgba(178,59,59,0.10)", line_width=0)
+                fig_vk.add_hrect(y0=0, y1=15, fillcolor="rgba(63,145,66,0.10)", line_width=0)
+                fig_vk.add_hline(y=20, line_dash="dot", line_color="gray", opacity=0.6)
+                fig_vk.add_hline(y=30, line_dash="dot", line_color="gray", opacity=0.6)
+                fig_vk.add_trace(
+                    go.Scatter(x=vkospi.index, y=vkospi.values, name="VKOSPI",
+                               line=dict(color="#c0392b", width=1.6)),
+                    secondary_y=False
+                )
+                if not kospi9.empty:
+                    fig_vk.add_trace(
+                        go.Scatter(x=kospi9.index, y=kospi9.values, name="코스피",
+                                   line=dict(color="#1f77b4", width=1.3)),
+                        secondary_y=True
+                    )
+                apply_title_and_legend(
+                    fig_vk, f"<b>{vkospi_name or 'VKOSPI'}</b> | 현재: {latest_vk:.1f}",
+                    height=440, **CHART9_SIDE
+                )
+                fig_vk.update_yaxes(title_text="VKOSPI", secondary_y=False)
+                fig_vk.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
+                fig_vk.update_xaxes(range=x_range_9)
+                st.plotly_chart(fig_vk, use_container_width=True, config={'scrollZoom': False})
+
+                col_k1, col_k2, col_k3 = st.columns(3)
+                col_k1.metric("현재 VKOSPI", f"{latest_vk:.1f}")
+                col_k2.metric("선택 구간 평균", f"{vkospi.mean():.1f}")
+                col_k3.metric("선택 구간 최고", f"{vkospi.max():.1f}")
 
 # ==========================================
 # [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
