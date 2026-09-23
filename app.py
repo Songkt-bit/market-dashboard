@@ -1170,16 +1170,15 @@ KRX_OPENAPI_403_HELP = (
     "생기는 현상으로, 잠시 후 다시 열면 재시도합니다. 계속 반복되면 조회 기간을 "
     "줄여야 합니다."
 )
-# 하루 = 요청 1회라, 기간이 길수록 요청이 선형으로 늘어납니다. 첫 로딩 비용을
-# 억제하려고 조회 구간을 1년으로 제한합니다(약 245영업일).
-VKOSPI_MAX_DAYS = 365
-# KRX 앞단은 순간 속도가 아니라 '총 요청량'을 막습니다 — 8병렬로 260건을 쏴도,
-# 2병렬 + 요청당 0.2초로 3분에 걸쳐 260건을 보내도 똑같이 403이 떨어졌습니다.
-# 그래서 요청 수 자체를 줄입니다: 일별 대신 주 1회 표본(1년 ≈ 52건).
-# 변동성지수의 하루짜리 스파이크는 놓칠 수 있지만, 추세와 국면 비교에는 충분합니다.
+VKOSPI_DATA_START = datetime.date(2010, 1, 4)  # KRX 공식 문서 기준 제공 시작일
+# KRX 앞단은 순간 속도가 아니라 '총 요청량'을 막습니다 — 8병렬로 260건을 한꺼번에
+# 쏴도, 2병렬 + 요청당 0.3초로 3분에 걸쳐 260건을 보내도 똑같이 403이 떨어진 반면
+# 주 1회 표본(1년 ≈ 53건)은 통과했습니다. 정확한 한도는 공개돼 있지 않으니, 기간
+# 버튼(1년~Max)을 다른 차트처럼 그대로 쓰되 요청 수는 이 안전선 아래로 고정하고
+# 대신 기간이 길어질수록 표본 간격을 넓혀서 늘어난 기간을 커버합니다.
 KRX_OPENAPI_WORKERS = 2
 KRX_OPENAPI_DELAY = 0.3
-VKOSPI_SAMPLE_FREQ = "W-WED"  # 수요일 기준 주 1회 (월/금보다 휴장일에 덜 걸림)
+VKOSPI_REQUEST_BUDGET = 55
 
 
 def _pick_vkospi_name(names):
@@ -1223,7 +1222,7 @@ def _secret_key_names() -> str:
 
 
 def get_vkospi_data(start_date_str: str):
-    """VKOSPI 주별 종가. 반환: (Series, 선택된 지수명, 조회된 지수명 전체, error)
+    """VKOSPI 표본 종가(기간에 따라 표본 간격 자동 조정). 반환: (Series, 선택된 지수명, 조회된 지수명 전체, error)
 
     인증키 검사는 캐시 밖에서 합니다 — 캐시 안에 두면 키를 나중에 넣어도
     실패 결과가 캐시 수명(하루) 동안 그대로 남습니다."""
@@ -1243,11 +1242,12 @@ def get_vkospi_data(start_date_str: str):
 @st.cache_data(ttl=86400, show_spinner="VKOSPI(파생상품지수)를 불러오는 중입니다...")
 def _fetch_vkospi(start_date_str: str, key: str):
     today = datetime.date.today()
-    start = max(
-        pd.to_datetime(start_date_str).date(),
-        today - datetime.timedelta(days=VKOSPI_MAX_DAYS),
-    )
-    days = pd.date_range(start, today, freq=VKOSPI_SAMPLE_FREQ)
+    start = max(pd.to_datetime(start_date_str).date(), VKOSPI_DATA_START)
+    bdays = pd.bdate_range(start, today)
+    # 요청 수를 예산(VKOSPI_REQUEST_BUDGET) 아래로 맞추도록 표본 간격을 늘립니다.
+    # 짧은 기간(영업일 수가 예산보다 적은 경우)은 그대로 일별로 조회됩니다.
+    step = max(1, -(-len(bdays) // VKOSPI_REQUEST_BUDGET))  # ceil division
+    days = bdays[::step]
     headers = {
         "AUTH_KEY": key,
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -2309,13 +2309,15 @@ with tab9:
             st.divider()
 
             # ---- VKOSPI(코스피200 변동성지수) + 코스피 오버레이 ----
-            # 위 VIX 차트와 같은 기간·여백을 써서 미국/한국 변동성을 나란히 대조합니다.
+            # 위 F&G·VIX 차트와 같은 기간 선택(period_option_9)을 그대로 씁니다. KRX가
+            # 총 요청량을 제한해 일별 조회는 못 쓰므로, 기간이 길어질수록 표본 간격을
+            # 넓혀 요청 수를 일정하게 유지합니다(자세한 수치는 차트 아래에 표시).
             st.markdown("### 🇰🇷 VKOSPI(코스피200 변동성지수) 추이")
             st.caption(
                 "VKOSPI는 코스피200 옵션 가격에서 역산한 변동성 지수로, 한국판 VIX입니다. "
                 "코스피 지수를 우측 축에 겹쳐 그렸습니다 — **범례를 클릭하면 해당 선을 숨기거나 다시 표시**할 수 있습니다. "
                 "변동성지수는 지수가 급락할 때 치솟는 역상관 관계를 보이는 것이 일반적입니다. "
-                "(KRX OPEN API는 하루치씩만 조회되는 데다 총 요청량 제한이 있어, 위 기간 설정과 무관하게 **최근 1년을 주 1회 표본**으로 표시합니다)"
+                "(KRX OPEN API는 하루치씩만 조회되는 데다 총 요청량 제한이 있어, 기간이 길수록 표본 간격을 넓혀 조회합니다 — 1년은 주 단위, Max는 분기 단위 수준)"
             )
 
             vkospi, vkospi_name, vkospi_all_names, vkospi_err = get_vkospi_data(
@@ -2350,12 +2352,23 @@ with tab9:
                 )
                 fig_vk.update_yaxes(title_text="VKOSPI", secondary_y=False)
                 fig_vk.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
+                fig_vk.update_xaxes(range=x_range_9)
                 st.plotly_chart(fig_vk, use_container_width=True, config={'scrollZoom': False})
 
                 col_k1, col_k2, col_k3 = st.columns(3)
                 col_k1.metric("현재 VKOSPI", f"{latest_vk:.1f}")
                 col_k2.metric("선택 구간 평균", f"{vkospi.mean():.1f}")
                 col_k3.metric("선택 구간 최고", f"{vkospi.max():.1f}")
+
+                avg_gap = ((vkospi.index[-1] - vkospi.index[0]).days / max(len(vkospi) - 1, 1))
+                clamp_note = (
+                    f" (VKOSPI는 {VKOSPI_DATA_START.strftime('%Y-%m-%d')}부터 제공되어 그 이전은 조회되지 않습니다)"
+                    if pd.to_datetime(start_date_9) < pd.Timestamp(VKOSPI_DATA_START) else ""
+                )
+                st.caption(
+                    f"실제 조회 구간: {vkospi.index[0].strftime('%Y-%m-%d')} ~ {vkospi.index[-1].strftime('%Y-%m-%d')} · "
+                    f"표본 {len(vkospi)}개 · 평균 간격 약 {avg_gap:.0f}일{clamp_note}"
+                )
 
                 # KRX에는 이름에 '변동성'이 들어간 주가지수(최소변동성지수 등)가 따로 있어
                 # 엉뚱한 지수를 잡은 적이 있습니다. 어떤 지수를 골랐는지 검증할 수 있게 남겨둡니다.
