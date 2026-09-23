@@ -1146,17 +1146,32 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
 # 잘못된 코드를 박아두면 조용히 엉뚱한 지수를 그리게 됩니다. 이름에 '변동성'이 들어간
 # 지수를 KOSPI 계열에서 찾아 쓰고, 못 찾으면 실패를 드러냅니다.
 @st.cache_data(ttl=86400)
-def find_vkospi_ticker():
-    """KOSPI 계열 지수 중 이름에 '변동성'이 들어간 지수의 티커. 반환: (ticker, name, error)"""
-    try:
-        for market in ("KOSPI", "KRX"):
+def list_krx_indices():
+    """KRX가 제공하는 전 계열 지수의 (티커, 이름) 목록. 반환: (list, error)"""
+    found, errors = [], []
+    for market in ("KOSPI", "KOSDAQ", "KRX", "테마"):
+        try:
             for ticker in pykrx_stock.get_index_ticker_list(market=market):
-                name = pykrx_stock.get_index_ticker_name(ticker)
-                if "변동성" in str(name):
-                    return ticker, name, None
-    except Exception as e:
-        return None, None, f"{type(e).__name__}: {e}"
-    return None, None, "KRX 지수 목록에서 변동성지수를 찾지 못했습니다."
+                found.append((market, ticker, str(pykrx_stock.get_index_ticker_name(ticker))))
+        except Exception as e:
+            errors.append(f"{market}: {type(e).__name__}: {e}")
+    if not found:
+        return [], " / ".join(errors) or "지수 목록이 비어 있습니다."
+    return found, None
+
+
+def find_vkospi_ticker():
+    """이름에 '변동성' 또는 'VKOSPI'가 들어간 지수를 찾습니다. 반환: (ticker, name, error)"""
+    indices, err = list_krx_indices()
+    if err:
+        return None, None, err
+    for _market, ticker, name in indices:
+        if "변동성" in name or "VKOSPI" in name.upper().replace("-", ""):
+            return ticker, name, None
+    return None, None, (
+        f"KRX 지수 {len(indices)}개 중 변동성지수가 없습니다. "
+        "아래 '조회 가능한 KRX 지수 목록'에서 실제 이름을 확인해주세요."
+    )
 
 
 @st.cache_data(ttl=3600)
@@ -2191,6 +2206,16 @@ with tab9:
             vkospi, vkospi_name, vkospi_err = get_vkospi_data(start_date_9.strftime("%Y-%m-%d"))
             if vkospi.empty:
                 st.warning(f"VKOSPI 데이터를 불러오지 못했습니다 — {vkospi_err}")
+                # KRX 접속은 되는데 지수를 못 찾은 경우, 실제로 무슨 지수가 있는지 보여줍니다.
+                # (KRX는 지수 코드 문서를 공개하지 않아 목록을 직접 확인하는 것이 가장 빠릅니다)
+                if KRX_LOGIN_CONFIGURED and PYKRX_AVAILABLE:
+                    indices, list_err = list_krx_indices()
+                    if indices:
+                        with st.expander(f"조회 가능한 KRX 지수 목록 ({len(indices)}개)"):
+                            st.dataframe(
+                                pd.DataFrame(indices, columns=["계열", "코드", "지수명"]),
+                                use_container_width=True, hide_index=True,
+                            )
             else:
                 latest_vk = vkospi.iloc[-1]
                 kospi9 = get_single_index_close("^KS11", start_date_9.strftime("%Y-%m-%d"))
