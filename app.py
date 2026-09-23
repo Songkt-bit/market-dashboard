@@ -1173,10 +1173,13 @@ KRX_OPENAPI_403_HELP = (
 # 하루 = 요청 1회라, 기간이 길수록 요청이 선형으로 늘어납니다. 첫 로딩 비용을
 # 억제하려고 조회 구간을 1년으로 제한합니다(약 245영업일).
 VKOSPI_MAX_DAYS = 365
-# 8병렬로 260건을 한 번에 쏘니 KRX 앞단에서 403으로 끊겼습니다. 동시성을 낮추고
-# 요청마다 간격을 둬서 통과시킵니다 (1년치 ≈ 260건 × 0.2초 ÷ 2 ≈ 30초, 하루 캐시).
+# KRX 앞단은 순간 속도가 아니라 '총 요청량'을 막습니다 — 8병렬로 260건을 쏴도,
+# 2병렬 + 요청당 0.2초로 3분에 걸쳐 260건을 보내도 똑같이 403이 떨어졌습니다.
+# 그래서 요청 수 자체를 줄입니다: 일별 대신 주 1회 표본(1년 ≈ 52건).
+# 변동성지수의 하루짜리 스파이크는 놓칠 수 있지만, 추세와 국면 비교에는 충분합니다.
 KRX_OPENAPI_WORKERS = 2
-KRX_OPENAPI_DELAY = 0.2
+KRX_OPENAPI_DELAY = 0.3
+VKOSPI_SAMPLE_FREQ = "W-WED"  # 수요일 기준 주 1회 (월/금보다 휴장일에 덜 걸림)
 
 
 def _krx_openapi_key() -> str:
@@ -1224,7 +1227,7 @@ def _fetch_vkospi(start_date_str: str, key: str):
         pd.to_datetime(start_date_str).date(),
         today - datetime.timedelta(days=VKOSPI_MAX_DAYS),
     )
-    days = pd.bdate_range(start, today)
+    days = pd.date_range(start, today, freq=VKOSPI_SAMPLE_FREQ)
     headers = {
         "AUTH_KEY": key,
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -2276,7 +2279,7 @@ with tab9:
                 "VKOSPI는 코스피200 옵션 가격에서 역산한 변동성 지수로, 한국판 VIX입니다. "
                 "코스피 지수를 우측 축에 겹쳐 그렸습니다 — **범례를 클릭하면 해당 선을 숨기거나 다시 표시**할 수 있습니다. "
                 "변동성지수는 지수가 급락할 때 치솟는 역상관 관계를 보이는 것이 일반적입니다. "
-                "(KRX OPEN API는 하루치씩만 조회되어 요청 수가 기간에 비례하므로, 위 기간 설정과 무관하게 **최근 1년**만 표시합니다)"
+                "(KRX OPEN API는 하루치씩만 조회되는 데다 총 요청량 제한이 있어, 위 기간 설정과 무관하게 **최근 1년을 주 1회 표본**으로 표시합니다)"
             )
 
             vkospi, vkospi_name, vkospi_err = get_vkospi_data(start_date_9.strftime("%Y-%m-%d"))
