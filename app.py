@@ -1133,85 +1133,91 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
     return breadth, {"ok": ok, "total": len(codes), "error": None, "source": source_used}
 
 
-@st.cache_data(ttl=3600)
 # ---------------------------------------------------------------------------
 # VKOSPI (코스피200 변동성지수) — Page 9
 # ---------------------------------------------------------------------------
-# VIX와 달리 야후 파이낸스에 VKOSPI 지수가 없습니다(^VKOSPI 등 어떤 표기로도 빈 응답).
-# 네이버 금융·stooq도 막혀 있어서, 현실적으로 KRX가 유일한 공개 경로입니다.
-# KRX는 2025-12-27부터 회원제라 로그인이 필요합니다 — Page 10 코스피200과 같은
-# KRX_ID/KRX_PW 설정을 그대로 쓰고, 없으면 같은 안내(KRX_LOGIN_HELP)를 띄웁니다.
+# 야후 파이낸스에는 VKOSPI가 없고(^VKOSPI 등 어떤 표기로도 빈 응답), 네이버·stooq도
+# 막혀 있어 KRX가 유일한 공개 경로입니다.
 #
-# 지수 코드를 상수로 박지 않고 이름으로 찾는 이유: KRX 지수 코드는 공개 문서가 없어
-# 잘못된 코드를 박아두면 조용히 엉뚱한 지수를 그리게 됩니다. 이름에 '변동성'이 들어간
-# 지수를 KOSPI 계열에서 찾아 쓰고, 못 찾으면 실패를 드러냅니다.
-@st.cache_data(ttl=86400)
-def list_krx_indices():
-    """KRX 전체 지수 목록. 반환: (DataFrame[지수명, 티커, 시장], error)
+# VKOSPI는 KRX의 '주가지수'가 아니라 파생상품지수입니다. 그래서 pykrx의 지수 조회
+# (get_index_ohlcv)로는 닿지 않습니다 — KRX 지수 검색(finder_equidx)이 돌려주는
+# 171개 목록을 mktsel 전 범위로 뒤져도 이름에 '변동성'이 들어간 지수가 없습니다.
+#
+# 대신 KRX가 공식 제공하는 Data Marketplace OPEN API의 '파생상품지수 시세정보'
+# (drvprod_dd_trd)를 씁니다. 2010-01-04치부터 제공되고, 하루치 요청이 그날의
+# 파생상품지수 전체를 돌려주므로 그 안에서 VKOSPI를 골라냅니다.
+#
+# 준비물: openapi.krx.co.kr에서 'API 이용신청' 후 발급받는 인증키를
+#        Secrets에 KRX_OPENAPI_KEY로 추가. (data.krx.co.kr 로그인용
+#        KRX_ID/KRX_PW와는 별개입니다)
+KRX_OPENAPI_URL = "https://data-dbg.krx.co.kr/svc/apis/idx/drvprod_dd_trd"
+KRX_OPENAPI_HELP = (
+    "KRX OPEN API 인증키가 없습니다. openapi.krx.co.kr에서 'API 이용신청'으로 인증키를 "
+    "발급받은 뒤(무료), Secrets에 KRX_OPENAPI_KEY를 추가해주세요. "
+    "data.krx.co.kr 로그인용 KRX_ID/KRX_PW와는 별개의 키입니다."
+)
+# 하루 = 요청 1회라, 기간이 길수록 요청이 선형으로 늘어납니다. 첫 로딩 비용을
+# 억제하려고 조회 구간을 1년으로 제한합니다(약 245영업일).
+VKOSPI_MAX_DAYS = 365
 
-    pykrx의 get_index_ticker_list()는 KOSPI/KOSDAQ/KRX/테마 4개 계열만 훑고,
-    이름 조회가 지수 1개당 KRX 요청 1회라 느린 데다 VKOSPI가 잡히지 않았습니다.
-    KRX의 지수 검색(finder_equidx, mktsel=전체)은 같은 목록의 상위집합을
-    한 번의 요청으로 주므로 이쪽을 씁니다.
-    티커는 pykrx 규칙(그룹코드 + 지수코드, 예: 코스피 = "1"+"001")대로 조립합니다.
-    """
+
+def _krx_openapi_key() -> str:
     try:
-        from pykrx.website.krx.market.core import 지수이름조회
-        df = 지수이름조회().fetch()
-    except Exception as e:
-        return pd.DataFrame(), f"{type(e).__name__}: {e}"
-    if df is None or df.empty:
-        return pd.DataFrame(), "KRX 지수 목록이 비어 있습니다 (로그인 또는 응답 문제)."
-
-    out = df.reset_index()
-    need = {"codeName", "full_code", "short_code"}
-    if not need.issubset(out.columns):
-        return pd.DataFrame(), f"예상과 다른 응답 컬럼: {list(out.columns)}"
-    out["티커"] = out["full_code"].astype(str) + out["short_code"].astype(str)
-    out = out.rename(columns={"codeName": "지수명", "marketName": "시장"})
-    cols = ["지수명", "티커"] + (["시장"] if "시장" in out.columns else [])
-    return out[cols], None
+        key = st.secrets.get("KRX_OPENAPI_KEY", "")
+    except Exception:
+        key = ""
+    return key or os.environ.get("KRX_OPENAPI_KEY", "")
 
 
-def find_vkospi_ticker():
-    """이름에 '변동성'이 들어간 지수를 찾습니다. 반환: (ticker, name, error)"""
-    df, err = list_krx_indices()
-    if err:
-        return None, None, err
-    hit = df[df["지수명"].astype(str).str.contains("변동성", na=False)]
-    if hit.empty:
-        return None, None, (
-            f"KRX 지수 {len(df)}개 중 '변동성'이 들어간 지수가 없습니다. "
-            "아래 목록에서 실제 이름을 확인해주세요."
-        )
-    row = hit.iloc[0]
-    return row["티커"], str(row["지수명"]), None
-
-
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400, show_spinner="VKOSPI(파생상품지수)를 불러오는 중입니다...")
 def get_vkospi_data(start_date_str: str):
     """VKOSPI 일별 종가. 반환: (Series, 지수명, error)"""
-    if not PYKRX_AVAILABLE:
-        return pd.Series(dtype=float), None, f"pykrx 임포트 실패: {PYKRX_IMPORT_ERROR}"
-    if not KRX_LOGIN_CONFIGURED:
-        return pd.Series(dtype=float), None, KRX_LOGIN_HELP
+    key = _krx_openapi_key()
+    if not key:
+        return pd.Series(dtype=float), None, KRX_OPENAPI_HELP
 
-    ticker, name, err = find_vkospi_ticker()
-    if not ticker:
-        return pd.Series(dtype=float), None, err
+    today = datetime.date.today()
+    start = max(
+        pd.to_datetime(start_date_str).date(),
+        today - datetime.timedelta(days=VKOSPI_MAX_DAYS),
+    )
+    days = pd.bdate_range(start, today)
+    headers = {"AUTH_KEY": key, "User-Agent": "Mozilla/5.0"}
 
-    try:
-        df = pykrx_stock.get_index_ohlcv(
-            start_date_str.replace("-", ""),
-            datetime.date.today().strftime("%Y%m%d"),
-            ticker,
-        )
-    except Exception as e:
-        return pd.Series(dtype=float), name, f"{type(e).__name__}: {e}"
+    def fetch_day(day):
+        try:
+            res = requests.get(KRX_OPENAPI_URL, params={"basDd": day.strftime("%Y%m%d")},
+                               headers=headers, timeout=20)
+            if res.status_code != 200:
+                return day, None, f"HTTP {res.status_code}"
+            rows = res.json().get("OutBlock_1") or []
+        except Exception as e:
+            return day, None, f"{type(e).__name__}: {e}"
+        return day, rows, None
 
-    if df is None or df.empty or "종가" not in df.columns:
-        return pd.Series(dtype=float), name, "VKOSPI 응답이 비어 있습니다 (휴장일이거나 KRX 조회 실패)."
-    return pd.to_numeric(df["종가"], errors="coerce").dropna(), name, None
+    values, names, errors = {}, set(), []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for day, rows, err in pool.map(fetch_day, days):
+            if err:
+                errors.append(err)
+                continue
+            for row in rows:
+                name = str(row.get("IDX_NM", ""))
+                names.add(name)
+                if "변동성" in name:  # 예: 코스피 200 변동성지수
+                    close = pd.to_numeric(str(row.get("CLSPRC_IDX", "")).replace(",", ""),
+                                          errors="coerce")
+                    if pd.notna(close) and close > 0:
+                        values[pd.Timestamp(day)] = float(close)
+                        names.add(f"__matched__{name}")
+
+    if values:
+        matched = next((n[11:] for n in names if n.startswith("__matched__")), "VKOSPI")
+        return pd.Series(values).sort_index(), matched, None
+    if names:
+        sample = ", ".join(sorted(n for n in names if not n.startswith("__matched__"))[:12])
+        return pd.Series(dtype=float), None, f"파생상품지수 응답에 변동성지수가 없습니다. 조회된 지수: {sample}"
+    return pd.Series(dtype=float), None, (errors[0] if errors else "응답이 비어 있습니다.")
 
 
 def get_single_index_close(ticker: str, start_date_str: str):
@@ -2214,22 +2220,17 @@ with tab9:
             st.caption(
                 "VKOSPI는 코스피200 옵션 가격에서 역산한 변동성 지수로, 한국판 VIX입니다. "
                 "코스피 지수를 우측 축에 겹쳐 그렸습니다 — **범례를 클릭하면 해당 선을 숨기거나 다시 표시**할 수 있습니다. "
-                "변동성지수는 지수가 급락할 때 치솟는 역상관 관계를 보이는 것이 일반적입니다."
+                "변동성지수는 지수가 급락할 때 치솟는 역상관 관계를 보이는 것이 일반적입니다. "
+                "(KRX OPEN API는 하루치씩만 조회되어 요청 수가 기간에 비례하므로, 위 기간 설정과 무관하게 **최근 1년**만 표시합니다)"
             )
 
             vkospi, vkospi_name, vkospi_err = get_vkospi_data(start_date_9.strftime("%Y-%m-%d"))
             if vkospi.empty:
                 st.warning(f"VKOSPI 데이터를 불러오지 못했습니다 — {vkospi_err}")
-                # KRX 접속은 되는데 지수를 못 찾은 경우, 실제로 무슨 지수가 있는지 보여줍니다.
-                # (KRX는 지수 코드 문서를 공개하지 않아 목록을 직접 확인하는 것이 가장 빠릅니다)
-                if KRX_LOGIN_CONFIGURED and PYKRX_AVAILABLE:
-                    df_idx, list_err = list_krx_indices()
-                    if not df_idx.empty:
-                        with st.expander(f"조회 가능한 KRX 지수 목록 ({len(df_idx)}개)"):
-                            st.dataframe(df_idx, use_container_width=True, hide_index=True)
             else:
                 latest_vk = vkospi.iloc[-1]
-                kospi9 = get_single_index_close("^KS11", start_date_9.strftime("%Y-%m-%d"))
+                # 코스피도 VKOSPI가 실제로 덮는 구간으로 맞춰야 두 선을 겹쳐 읽을 수 있습니다.
+                kospi9 = get_single_index_close("^KS11", vkospi.index[0].strftime("%Y-%m-%d"))
 
                 fig_vk = make_subplots(specs=[[{"secondary_y": True}]])
                 fig_vk.add_hrect(y0=30, y1=max(float(vkospi.max()), 30) + 5,
@@ -2254,7 +2255,6 @@ with tab9:
                 )
                 fig_vk.update_yaxes(title_text="VKOSPI", secondary_y=False)
                 fig_vk.update_yaxes(title_text="코스피 (pt)", secondary_y=True)
-                fig_vk.update_xaxes(range=x_range_9)
                 st.plotly_chart(fig_vk, use_container_width=True, config={'scrollZoom': False})
 
                 col_k1, col_k2, col_k3 = st.columns(3)
