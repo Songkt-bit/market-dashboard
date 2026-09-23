@@ -534,7 +534,9 @@ def get_dram_spot_history():
         for label, prefix in DRAM_SPOT_HISTORY_SKUS.items():
             if name.startswith(prefix):
                 s = pd.Series(series.get("v", []), index=pd.to_datetime(series.get("d", [])))
-                cols[label] = pd.to_numeric(s, errors="coerce").dropna()
+                s = pd.to_numeric(s, errors="coerce").dropna()
+                # 제공처 데이터에 2026-06-18이 두 번 들어 있어(중복 라벨은 reindex를 깨뜨림) 마지막 값만 유지
+                cols[label] = s[~s.index.duplicated(keep="last")]
     if not cols:
         return pd.DataFrame(), "응답에서 대상 SKU 계열을 찾지 못했습니다 (제공처 스키마 변경 가능성)."
     return pd.DataFrame(cols).sort_index(), None
@@ -1667,39 +1669,63 @@ with tab5:
                 "조회 기간을 선택하세요:", ["전체", "10년", "5년", "3년", "1년"],
                 index=0, horizontal=True, key="dram_hist_period",
             )
+            skus = [c for c in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"] if c in df_hist.columns]
+
+            # YoY = 오늘 값 / 정확히 1년 전 값 - 1. 1년 전 날짜가 휴장이면 그 이전 가장 가까운
+            # 값(최대 10일 전)을 씁니다. 기간 필터 "전에" 계산해야 1년 전 값이 잘리지 않습니다.
+            yoy = pd.DataFrame(index=df_hist.index)
+            for c in skus:
+                s = df_hist[c].dropna()
+                prior = s.reindex(s.index - pd.DateOffset(years=1), method="ffill",
+                                  tolerance=pd.Timedelta(days=10))
+                prior.index = s.index
+                yoy[c] = (s / prior - 1) * 100
+
             if period_option_5 != "전체":
-                start_5 = get_start_date(period_option_5)
-                df_hist = df_hist[df_hist.index >= pd.to_datetime(start_5)]
+                start_5 = pd.to_datetime(get_start_date(period_option_5))
+                df_hist = df_hist[df_hist.index >= start_5]
+                yoy = yoy[yoy.index >= start_5]
 
             palette_hist = {
                 "DDR5 16Gb": "#4f46e5", "DDR4 16Gb": "#0ea5e9",
                 "DDR4 8Gb": "#ff7f0e", "DDR3 4Gb": "#16a34a",
             }
-            fig_hist = go.Figure()
-            for col in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"]:
-                if col not in df_hist.columns:
-                    continue
-                s = df_hist[col].dropna()
-                if s.empty:
-                    continue
-                fig_hist.add_trace(go.Scatter(
-                    x=s.index, y=s.values, name=col, mode="lines",
-                    line=dict(color=palette_hist.get(col), width=2), connectgaps=False,
-                ))
             latest_date = df_hist.index.max()
-            latest_bits = " · ".join(
-                f"{c} ${df_hist[c].dropna().iloc[-1]:,.2f}"
-                for c in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"]
-                if c in df_hist.columns and not df_hist[c].dropna().empty
+            st.caption(
+                f"최신 {latest_date.strftime('%Y-%m-%d')} · "
+                + " · ".join(f"{c} \\${df_hist[c].dropna().iloc[-1]:,.2f}" for c in skus)  # \$: 마크다운 수식 방지
             )
-            apply_title_and_legend(
-                fig_hist,
-                f"<b>D램 칩 현물가 (일별)</b> (최신 {latest_date.strftime('%Y-%m-%d')}: {latest_bits})",
-                height=460,
-            )
-            fig_hist.update_yaxes(title_text="현물가 ($/칩)", type="log")
-            fig_hist.update_xaxes(title_text="연도")
-            st.plotly_chart(fig_hist, use_container_width=True, config={'scrollZoom': False})
+            x_range_5 = [df_hist.index.min(), latest_date]  # 두 차트의 x축을 맞춤
+
+            col_price, col_yoy = st.columns(2)
+            with col_price:
+                fig_hist = go.Figure()
+                for c in skus:
+                    s = df_hist[c].dropna()
+                    if not s.empty:
+                        fig_hist.add_trace(go.Scatter(
+                            x=s.index, y=s.values, name=c, mode="lines",
+                            line=dict(color=palette_hist.get(c), width=2), connectgaps=False,
+                        ))
+                apply_title_and_legend(fig_hist, "<b>현물가 (일별, 로그축)</b>", height=460)
+                fig_hist.update_yaxes(title_text="현물가 ($/칩)", type="log")
+                fig_hist.update_xaxes(range=x_range_5)
+                st.plotly_chart(fig_hist, use_container_width=True, config={'scrollZoom': False})
+
+            with col_yoy:
+                fig_yoy = go.Figure()
+                for c in skus:
+                    s = yoy[c].dropna()
+                    if not s.empty:
+                        fig_yoy.add_trace(go.Scatter(
+                            x=s.index, y=s.values, name=c, mode="lines",
+                            line=dict(color=palette_hist.get(c), width=2), connectgaps=False,
+                        ))
+                fig_yoy.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.6)
+                apply_title_and_legend(fig_yoy, "<b>전년 동기 대비 (YoY %)</b>", height=460)
+                fig_yoy.update_yaxes(title_text="YoY (%)", ticksuffix="%")
+                fig_yoy.update_xaxes(range=x_range_5)
+                st.plotly_chart(fig_yoy, use_container_width=True, config={'scrollZoom': False})
 
             with st.expander("일별 원본 값 보기 (CSV 다운로드)"):
                 table_hist = df_hist.round(3).copy()
