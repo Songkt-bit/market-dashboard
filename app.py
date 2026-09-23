@@ -1166,16 +1166,36 @@ def _krx_openapi_key() -> str:
         key = st.secrets.get("KRX_OPENAPI_KEY", "")
     except Exception:
         key = ""
-    return key or os.environ.get("KRX_OPENAPI_KEY", "")
+    return (key or os.environ.get("KRX_OPENAPI_KEY", "")).strip()
+
+
+def _secret_key_names() -> str:
+    """Secrets에 들어있는 '키 이름'만 나열합니다 (값은 절대 읽지 않습니다).
+    키를 못 찾을 때 이름 오타/중첩 섹션을 구분하기 위한 진단용입니다."""
+    try:
+        names = list(st.secrets.keys())
+    except Exception as e:
+        return f"(secrets 읽기 실패: {type(e).__name__})"
+    if not names:
+        return "(secrets가 비어 있음)"
+    return ", ".join(sorted(str(n) for n in names))
+
+
+def get_vkospi_data(start_date_str: str):
+    """VKOSPI 일별 종가. 반환: (Series, 지수명, error)
+
+    인증키 검사는 캐시 밖에서 합니다 — 캐시 안에 두면 키를 나중에 넣어도
+    실패 결과가 캐시 수명(하루) 동안 그대로 남습니다."""
+    key = _krx_openapi_key()
+    if not key:
+        return pd.Series(dtype=float), None, (
+            f"{KRX_OPENAPI_HELP} — 현재 이 앱이 인식한 Secrets 키: {_secret_key_names()}"
+        )
+    return _fetch_vkospi(start_date_str, key)
 
 
 @st.cache_data(ttl=86400, show_spinner="VKOSPI(파생상품지수)를 불러오는 중입니다...")
-def get_vkospi_data(start_date_str: str):
-    """VKOSPI 일별 종가. 반환: (Series, 지수명, error)"""
-    key = _krx_openapi_key()
-    if not key:
-        return pd.Series(dtype=float), None, KRX_OPENAPI_HELP
-
+def _fetch_vkospi(start_date_str: str, key: str):
     today = datetime.date.today()
     start = max(
         pd.to_datetime(start_date_str).date(),
