@@ -1190,16 +1190,14 @@ def _pick_vkospi_name(names):
     이건 값이 800~1000대(지수 포인트)라 10~50 범위인 변동성지수와 전혀 다릅니다.
     실제로 그걸 잡아서 엉뚱한 차트가 그려진 적이 있어 우선순위를 둡니다.
     """
-    cand = [str(n) for n in names if n]
-    flat = {n: n.upper().replace("-", "").replace(" ", "") for n in cand}
+    flat = {str(n): str(n).upper().replace("-", "").replace(" ", "") for n in names if n}
     for n, f in flat.items():                       # 1순위: V-KOSPI 표기
         if "VKOSPI" in f:
             return n
-    for n, f in flat.items():                       # 2순위: 코스피200 변동성지수
-        if "코스피200변동성" in f:
-            return n
-    for n, f in flat.items():                       # 3순위: 변동성지수 (최소변동성 제외)
-        if "변동성" in f and "최소변동성" not in f:
+    # 2순위: 이름이 '변동성지수'로 끝나는 것. 부분 문자열로 찾으면
+    # '코스피200변동성추세추종양매도지수'(양매도 전략지수)까지 걸리므로 끝을 봅니다.
+    for n, f in flat.items():
+        if f.endswith("변동성지수") and "최소변동성" not in f:
             return n
     return None
 
@@ -1296,7 +1294,18 @@ def _fetch_vkospi(start_date_str: str, key: str):
                         values[day] = float(close)
 
     if values:
-        return pd.Series(values).sort_index(), target, sorted(names), None
+        series = pd.Series(values).sort_index()
+        # 이름만 믿지 않고 값 범위로 한 번 더 거릅니다. 변동성지수는 통상 10~50이고
+        # 위기 때도 100을 넘지 않는 반면, 이름이 비슷한 전략·팩터 지수는 1000 기준으로
+        # 만들어져 수백~수천입니다. 예전에 '최소변동성지수'(≈850)를 잡아 그린 적이 있습니다.
+        median = float(series.median())
+        if not (1 <= median <= 200):
+            raise RuntimeError(
+                f"'{target}'를 골랐지만 값이 변동성지수 범위가 아닙니다(중앙값 {median:,.1f}). "
+                "전략·팩터 지수를 잘못 잡은 것으로 보입니다. 조회된 지수: "
+                + ", ".join(sorted(names))
+            )
+        return series, target, sorted(names), None
     if names:
         raise RuntimeError(
             "파생상품지수 응답에서 변동성지수를 찾지 못했습니다. 조회된 지수: "
@@ -2351,10 +2360,7 @@ with tab9:
                 # KRX에는 이름에 '변동성'이 들어간 주가지수(최소변동성지수 등)가 따로 있어
                 # 엉뚱한 지수를 잡은 적이 있습니다. 어떤 지수를 골랐는지 검증할 수 있게 남겨둡니다.
                 with st.expander(f"이 차트가 사용한 지수: {vkospi_name} — 조회된 파생상품지수 전체 보기"):
-                    st.dataframe(
-                        pd.DataFrame({"지수명": vkospi_all_names}),
-                        use_container_width=True, hide_index=True,
-                    )
+                    st.code("\n".join(vkospi_all_names), language=None)
 
 # ==========================================
 # [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
