@@ -1199,7 +1199,12 @@ def get_vkospi_data(start_date_str: str):
         return pd.Series(dtype=float), None, (
             f"{KRX_OPENAPI_HELP} — 현재 이 앱이 인식한 Secrets 키: {_secret_key_names()}"
         )
-    return _fetch_vkospi(start_date_str, key)
+    try:
+        return _fetch_vkospi(start_date_str, key)
+    except RuntimeError as e:
+        # 실패는 예외로 빠져나옵니다 — st.cache_data는 예외를 캐시하지 않으므로
+        # 승인이 나면 다음 조회에서 바로 다시 시도됩니다.
+        return pd.Series(dtype=float), None, str(e)
 
 
 @st.cache_data(ttl=86400, show_spinner="VKOSPI(파생상품지수)를 불러오는 중입니다...")
@@ -1246,8 +1251,8 @@ def _fetch_vkospi(start_date_str: str, key: str):
         return pd.Series(values).sort_index(), matched, None
     if names:
         sample = ", ".join(sorted(n for n in names if not n.startswith("__matched__"))[:12])
-        return pd.Series(dtype=float), None, f"파생상품지수 응답에 변동성지수가 없습니다. 조회된 지수: {sample}"
-    return pd.Series(dtype=float), None, (errors[0] if errors else "응답이 비어 있습니다.")
+        raise RuntimeError(f"파생상품지수 응답에 변동성지수가 없습니다. 조회된 지수: {sample}")
+    raise RuntimeError(errors[0] if errors else "응답이 비어 있습니다.")
 
 
 def get_single_index_close(ticker: str, start_date_str: str):
