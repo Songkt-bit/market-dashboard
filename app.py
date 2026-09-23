@@ -1151,10 +1151,18 @@ def get_kospi200_breadth_data(years: int = BREADTH_MAX_YEARS):
 #        Secrets에 KRX_OPENAPI_KEY로 추가. (data.krx.co.kr 로그인용
 #        KRX_ID/KRX_PW와는 별개입니다)
 KRX_OPENAPI_URL = "https://data-dbg.krx.co.kr/svc/apis/idx/drvprod_dd_trd"
+# KRX OPEN API는 승인이 두 번 필요합니다 — (1) 인증키 신청 후 관리자 승인,
+# (2) 쓰려는 API별 '활용신청' 후 관리자 승인. 둘 중 하나라도 안 끝나면 401이
+# 돌아오고, 본문은 어느 쪽이 문제인지 구분해주지 않습니다({"respMsg":"Unauthorized Key"}).
 KRX_OPENAPI_HELP = (
-    "KRX OPEN API 인증키가 없습니다. openapi.krx.co.kr에서 'API 이용신청'으로 인증키를 "
-    "발급받은 뒤(무료), Secrets에 KRX_OPENAPI_KEY를 추가해주세요. "
-    "data.krx.co.kr 로그인용 KRX_ID/KRX_PW와는 별개의 키입니다."
+    "KRX OPEN API 인증키가 없습니다. openapi.krx.co.kr에서 인증키를 발급받아(무료) "
+    "Secrets에 KRX_OPENAPI_KEY를 추가하고, '파생상품지수 시세정보' API에 대해 "
+    "활용신청까지 마쳐주세요. data.krx.co.kr 로그인용 KRX_ID/KRX_PW와는 별개의 키입니다."
+)
+KRX_OPENAPI_401_HELP = (
+    "KRX가 인증키를 거부했습니다(401). 인증키 신청과 '파생상품지수 시세정보' API "
+    "활용신청이 **둘 다 관리자 승인**까지 끝나야 조회됩니다 — openapi.krx.co.kr의 "
+    "마이페이지에서 승인 상태를 확인해주세요. (키 오타일 수도 있습니다)"
 )
 # 하루 = 요청 1회라, 기간이 길수록 요청이 선형으로 늘어납니다. 첫 로딩 비용을
 # 억제하려고 조회 구간을 1년으로 제한합니다(약 245영업일).
@@ -1208,8 +1216,10 @@ def _fetch_vkospi(start_date_str: str, key: str):
         try:
             res = requests.get(KRX_OPENAPI_URL, params={"basDd": day.strftime("%Y%m%d")},
                                headers=headers, timeout=20)
+            if res.status_code == 401:
+                return day, None, KRX_OPENAPI_401_HELP
             if res.status_code != 200:
-                return day, None, f"HTTP {res.status_code}"
+                return day, None, f"HTTP {res.status_code}: {res.text[:200]}"
             rows = res.json().get("OutBlock_1") or []
         except Exception as e:
             return day, None, f"{type(e).__name__}: {e}"
