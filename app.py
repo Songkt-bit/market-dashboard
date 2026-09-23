@@ -487,10 +487,9 @@ def get_dram_csv_data():
 # 서로 일치하는지 확인 후 하나만 남겼고, 2023-09-20처럼 소스 스프레드시트 자체가
 # 날짜를 잘못 찍은 경우(주말 날짜였음)는 이후 스크린샷에서 정정된 라벨로 바꿨습니다.
 #
-# 현재 2023-03-31~2023-12-29, 2025-04-17~2026-09-22 구간이 채워져 있고
-# 2024년 전체와 2025년 1~4월 일부는 비어 있습니다(다음 스크린샷 배치로 채울 예정).
-# DDR5 16Gb는 2025년 이전 스크린샷에 컬럼 자체가 없어(당시 DDR5가 주력이 아니었음)
-# 2023년 구간은 비어 있습니다.
+# 현재 2023-03-31~2026-09-22가 이어져 있습니다(2026-07은 스크린샷에 없어 moneyland로
+# 보충). DDR5 16Gb는 2025-03-07 이전 스크린샷에 컬럼 자체가 없어(당시 DDR5가 주력이
+# 아니었음) 그 이전 구간은 비어 있습니다.
 DRAM_PRICE_HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dram_price_history.csv")
 DRAM_PRICE_HISTORY_COLS = {
     "DDR5_16G": "DDR5 16Gb", "DDR4_16G": "DDR4 16Gb",
@@ -1649,21 +1648,20 @@ with tab5:
         if df_hist.empty:
             st.warning(f"현물가 장기 시계열을 불러오지 못했습니다 — {hist_err}")
         else:
-            # CSV는 특정 시점까지만 있으니, 그 이후는 moneyland 일별 API로 이어 붙입니다
-            # (moneyland는 DDR5 16Gb·DDR4 8Gb 2종만 있어 나머지 두 컬럼은 그 구간이 빕니다).
+            # CSV에 없는 날짜(끝난 이후 + 중간에 빠진 2026-07 등)는 moneyland 일별 API로
+            # 채웁니다. moneyland는 DDR5 16Gb·DDR4 8Gb 2종만 있어 나머지 두 컬럼은 그 구간이
+            # 빕니다. CSV에 이미 있는 값은 덮어쓰지 않습니다(combine_first).
             df_live, _ = get_dram_spot_history()
             if not df_live.empty:
-                df_live = df_live.rename(columns={"DDR5 16Gb": "DDR5 16Gb", "DDR4 8Gb": "DDR4 8Gb"})
-                df_live = df_live[df_live.index > df_hist.index.max()]
-                if not df_live.empty:
-                    df_hist = pd.concat([df_hist, df_live]).sort_index()
+                df_hist = df_hist.combine_first(df_live)
 
             st.caption(
                 "TNBfolio 텔레그램 채널([t.me/TNBfolio](https://t.me/TNBfolio)) 운영자가 올린 스프레드시트 "
                 "스크린샷을 직접 옮겨 적은 일별 현물가입니다. 값마다 이미지를 확대해 재확인하고 표의 "
-                "'전일비 증감률'과 계산값을 대조해 검증했습니다. **2024년 전체와 2025년 1~4월 일부는 "
-                "공백**입니다(스크린샷 추가 확보 예정). DDR5 16Gb는 2025년 이전 스크린샷에 컬럼이 없어 "
-                "2023년 구간은 비어 있습니다. 가장 최근 구간은 moneyland.co.kr 일별 API로 자동 이어집니다."
+                "'전일비 증감률'과 계산값을 대조해 검증했습니다. 2023-03-31부터 현재까지 이어지며, "
+                "DDR5 16Gb는 2025-03-07부터 값이 있습니다(그 이전 스크린샷에는 컬럼이 없음). "
+                "스크린샷에 없는 날(2026-07 등)은 moneyland.co.kr 일별 API로 채워지고 그 구간은 "
+                "DDR5·DDR4 8Gb만 나옵니다."
             )
 
             period_option_5 = st.radio(
