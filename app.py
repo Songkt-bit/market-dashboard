@@ -1182,6 +1182,28 @@ KRX_OPENAPI_DELAY = 0.3
 VKOSPI_SAMPLE_FREQ = "W-WED"  # 수요일 기준 주 1회 (월/금보다 휴장일에 덜 걸림)
 
 
+def _pick_vkospi_name(names):
+    """파생상품지수 이름들 중 VKOSPI를 고릅니다.
+
+    단순히 '변동성'을 포함하는 첫 지수를 고르면 안 됩니다 — KRX에는
+    'KRX 최소변동성지수'처럼 저변동성 팩터로 만든 '주가지수'가 따로 있고,
+    이건 값이 800~1000대(지수 포인트)라 10~50 범위인 변동성지수와 전혀 다릅니다.
+    실제로 그걸 잡아서 엉뚱한 차트가 그려진 적이 있어 우선순위를 둡니다.
+    """
+    cand = [str(n) for n in names if n]
+    flat = {n: n.upper().replace("-", "").replace(" ", "") for n in cand}
+    for n, f in flat.items():                       # 1순위: V-KOSPI 표기
+        if "VKOSPI" in f:
+            return n
+    for n, f in flat.items():                       # 2순위: 코스피200 변동성지수
+        if "코스피200변동성" in f:
+            return n
+    for n, f in flat.items():                       # 3순위: 변동성지수 (최소변동성 제외)
+        if "변동성" in f and "최소변동성" not in f:
+            return n
+    return None
+
+
 def _krx_openapi_key() -> str:
     try:
         key = st.secrets.get("KRX_OPENAPI_KEY", "")
@@ -1203,13 +1225,13 @@ def _secret_key_names() -> str:
 
 
 def get_vkospi_data(start_date_str: str):
-    """VKOSPI 일별 종가. 반환: (Series, 지수명, error)
+    """VKOSPI 주별 종가. 반환: (Series, 선택된 지수명, 조회된 지수명 전체, error)
 
     인증키 검사는 캐시 밖에서 합니다 — 캐시 안에 두면 키를 나중에 넣어도
     실패 결과가 캐시 수명(하루) 동안 그대로 남습니다."""
     key = _krx_openapi_key()
     if not key:
-        return pd.Series(dtype=float), None, (
+        return pd.Series(dtype=float), None, [], (
             f"{KRX_OPENAPI_HELP} — 현재 이 앱이 인식한 Secrets 키: {_secret_key_names()}"
         )
     try:
@@ -1217,7 +1239,7 @@ def get_vkospi_data(start_date_str: str):
     except RuntimeError as e:
         # 실패는 예외로 빠져나옵니다 — st.cache_data는 예외를 캐시하지 않으므로
         # 승인이 나면 다음 조회에서 바로 다시 시도됩니다.
-        return pd.Series(dtype=float), None, str(e)
+        return pd.Series(dtype=float), None, [], str(e)
 
 
 @st.cache_data(ttl=86400, show_spinner="VKOSPI(파생상품지수)를 불러오는 중입니다...")
@@ -1253,28 +1275,33 @@ def _fetch_vkospi(start_date_str: str, key: str):
             return day, None, f"{type(e).__name__}: {e}"
         return day, rows, None
 
-    values, names, errors = {}, set(), []
+    daily_rows, names, errors = {}, set(), []
     with ThreadPoolExecutor(max_workers=KRX_OPENAPI_WORKERS) as pool:
         for day, rows, err in pool.map(fetch_day, days):
             if err:
                 errors.append(err)
                 continue
+            daily_rows[pd.Timestamp(day)] = rows
+            names.update(str(r.get("IDX_NM", "")) for r in rows)
+
+    target = _pick_vkospi_name(names)
+    values = {}
+    if target:
+        for day, rows in daily_rows.items():
             for row in rows:
-                name = str(row.get("IDX_NM", ""))
-                names.add(name)
-                if "변동성" in name:  # 예: 코스피 200 변동성지수
+                if str(row.get("IDX_NM", "")) == target:
                     close = pd.to_numeric(str(row.get("CLSPRC_IDX", "")).replace(",", ""),
                                           errors="coerce")
                     if pd.notna(close) and close > 0:
-                        values[pd.Timestamp(day)] = float(close)
-                        names.add(f"__matched__{name}")
+                        values[day] = float(close)
 
     if values:
-        matched = next((n[11:] for n in names if n.startswith("__matched__")), "VKOSPI")
-        return pd.Series(values).sort_index(), matched, None
+        return pd.Series(values).sort_index(), target, sorted(names), None
     if names:
-        sample = ", ".join(sorted(n for n in names if not n.startswith("__matched__"))[:12])
-        raise RuntimeError(f"파생상품지수 응답에 변동성지수가 없습니다. 조회된 지수: {sample}")
+        raise RuntimeError(
+            "파생상품지수 응답에서 변동성지수를 찾지 못했습니다. 조회된 지수: "
+            + ", ".join(sorted(names))
+        )
     raise RuntimeError(errors[0] if errors else "응답이 비어 있습니다.")
 
 
@@ -2282,7 +2309,8 @@ with tab9:
                 "(KRX OPEN API는 하루치씩만 조회되는 데다 총 요청량 제한이 있어, 위 기간 설정과 무관하게 **최근 1년을 주 1회 표본**으로 표시합니다)"
             )
 
-            vkospi, vkospi_name, vkospi_err = get_vkospi_data(start_date_9.strftime("%Y-%m-%d"))
+            vkospi, vkospi_name, vkospi_all_names, vkospi_err = get_vkospi_data(
+                start_date_9.strftime("%Y-%m-%d"))
             if vkospi.empty:
                 st.warning(f"VKOSPI 데이터를 불러오지 못했습니다 — {vkospi_err}")
             else:
@@ -2319,6 +2347,14 @@ with tab9:
                 col_k1.metric("현재 VKOSPI", f"{latest_vk:.1f}")
                 col_k2.metric("선택 구간 평균", f"{vkospi.mean():.1f}")
                 col_k3.metric("선택 구간 최고", f"{vkospi.max():.1f}")
+
+                # KRX에는 이름에 '변동성'이 들어간 주가지수(최소변동성지수 등)가 따로 있어
+                # 엉뚱한 지수를 잡은 적이 있습니다. 어떤 지수를 골랐는지 검증할 수 있게 남겨둡니다.
+                with st.expander(f"이 차트가 사용한 지수: {vkospi_name} — 조회된 파생상품지수 전체 보기"):
+                    st.dataframe(
+                        pd.DataFrame({"지수명": vkospi_all_names}),
+                        use_container_width=True, hide_index=True,
+                    )
 
 # ==========================================
 # [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
