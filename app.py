@@ -475,15 +475,39 @@ def get_dram_csv_data():
 # ---------------------------------------------------------------------------
 # Page 5 — D램 현물가(spot) 장기 시계열
 # ---------------------------------------------------------------------------
-# 구글 시트 연동은 우리가 추적을 시작한 시점부터라 며칠치뿐입니다. 그 이전 구간을
-# 채우려고 공개 소스를 뒤졌는데, 칩 단위 현물가의 긴 과거 시계열은 사실상 전부
-# DRAMeXchange/TrendForce 유료 구독에 묶여 있습니다. (무료로 긴 차트를 보여주는
-# 집계 사이트 몇 곳은 확인해보니 과거 구간을 'cycle shape 기반 재구성'으로 만들어
-# 놓았거나, 번들에 실제 날짜가 10개도 없는 합성 차트여서 쓰지 않았습니다.)
+# 공개 무료 소스로는 칩 단위 현물가의 긴 과거 시계열을 구할 수 없었습니다
+# (DRAMeXchange/TrendForce는 유료 구독 전용이고, 무료로 긴 차트를 보여주는 집계
+# 사이트들은 과거 구간을 'cycle shape 기반 재구성'이거나 실제 날짜가 10개도 안
+# 되는 합성 차트였습니다). 대신 사용자가 TNBfolio 텔레그램 채널
+# (https://t.me/TNBfolio) 운영자가 매일 올린 스프레드시트 스크린샷 20장을 직접
+# 제공해, 그 안의 실제 값을 옮겨 적어 dram_price_history.csv로 번들했습니다.
 #
-# 실제 값으로 검증되는 소스는 moneyland.co.kr이 TrendForce 공개 현물가를 매일
-# 수집해 공개하는 JSON이었습니다. 시트와 SKU 표기·당일 값이 정확히 일치하고,
-# 2025-06-23부터 일별로 쌓여 있습니다. 하드코딩하면 갱신이 멈추므로 그대로 읽어옵니다.
+# 각 값은 스크린샷을 3배 확대한 크롭으로 재확인하고, 표 끝의 '전일비 증감률'과
+# 직접 계산한 변화율을 대조해 검증했습니다(불일치 0건). 중복 촬영된 날짜는 값이
+# 서로 일치하는지 확인 후 하나만 남겼고, 2023-09-20처럼 소스 스프레드시트 자체가
+# 날짜를 잘못 찍은 경우(주말 날짜였음)는 이후 스크린샷에서 정정된 라벨로 바꿨습니다.
+#
+# 현재 2023-03-31~2023-12-29, 2025-04-17~2026-09-22 구간이 채워져 있고
+# 2024년 전체와 2025년 1~4월 일부는 비어 있습니다(다음 스크린샷 배치로 채울 예정).
+# DDR5 16Gb는 2025년 이전 스크린샷에 컬럼 자체가 없어(당시 DDR5가 주력이 아니었음)
+# 2023년 구간은 비어 있습니다.
+DRAM_PRICE_HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dram_price_history.csv")
+DRAM_PRICE_HISTORY_COLS = {
+    "DDR5_16G": "DDR5 16Gb", "DDR4_16G": "DDR4 16Gb",
+    "DDR4_8G": "DDR4 8Gb", "DDR3_4G_512M": "DDR3 4Gb",
+}
+
+
+@st.cache_data(ttl=3600)
+def get_dram_price_history_csv():
+    """번들된 텔레그램 채널 스크린샷 기반 일별 현물가. 반환: (DataFrame, error)"""
+    try:
+        df = pd.read_csv(DRAM_PRICE_HISTORY_CSV, parse_dates=["Date"]).set_index("Date")
+    except Exception as e:
+        return pd.DataFrame(), f"{type(e).__name__}: {e}"
+    return df.rename(columns=DRAM_PRICE_HISTORY_COLS).sort_index(), None
+
+
 DRAM_SPOT_HISTORY_URL = "https://moneyland.co.kr/moneyweb/api/dram_dashboard.json"
 
 # 시트의 대표 SKU와 같은 품목만 사용 (표기가 미세하게 달라질 수 있어 접두어로 매칭)
@@ -1620,41 +1644,74 @@ with tab4:
 # [Page 5] 반도체(D램) 가격 추이
 # ==========================================
 with tab5:
-    with st.expander("📅 D램 현물가(spot) 장기 추이 — 월평균", expanded=True):
-        df_spot_hist, spot_hist_err = get_dram_spot_history()
-        if df_spot_hist.empty:
-            st.warning(f"현물가 장기 시계열을 불러오지 못했습니다 — {spot_hist_err}")
+    with st.expander("📅 D램 현물가(spot) 장기 추이 — 제품별 일별", expanded=True):
+        df_hist, hist_err = get_dram_price_history_csv()
+        if df_hist.empty:
+            st.warning(f"현물가 장기 시계열을 불러오지 못했습니다 — {hist_err}")
         else:
-            monthly = df_spot_hist.resample("MS").mean()
+            # CSV는 특정 시점까지만 있으니, 그 이후는 moneyland 일별 API로 이어 붙입니다
+            # (moneyland는 DDR5 16Gb·DDR4 8Gb 2종만 있어 나머지 두 컬럼은 그 구간이 빕니다).
+            df_live, _ = get_dram_spot_history()
+            if not df_live.empty:
+                df_live = df_live.rename(columns={"DDR5 16Gb": "DDR5 16Gb", "DDR4 8Gb": "DDR4 8Gb"})
+                df_live = df_live[df_live.index > df_hist.index.max()]
+                if not df_live.empty:
+                    df_hist = pd.concat([df_hist, df_live]).sort_index()
+
             st.caption(
-                "아래 구글 시트 차트와 **같은 지표(TrendForce 공개 현물가)** 이고 SKU도 같지만, "
-                "시트는 추적 시작 이후 며칠치뿐이라 그 이전 구간을 채우기 위해 매일 같은 현물가를 "
-                f"수집·공개하는 [moneyland.co.kr]({DRAM_SPOT_HISTORY_URL}) 데이터를 읽어와 월평균으로 그립니다. "
-                f"데이터 시작: {monthly.index[0].strftime('%Y-%m')} (그 이전 칩 단위 현물가는 "
-                "DRAMeXchange/TrendForce 유료 구독에만 있어 무료로 검증 가능한 소스를 찾지 못했습니다)."
+                "TNBfolio 텔레그램 채널([t.me/TNBfolio](https://t.me/TNBfolio)) 운영자가 올린 스프레드시트 "
+                "스크린샷을 직접 옮겨 적은 일별 현물가입니다. 값마다 이미지를 확대해 재확인하고 표의 "
+                "'전일비 증감률'과 계산값을 대조해 검증했습니다. **2024년 전체와 2025년 1~4월 일부는 "
+                "공백**입니다(스크린샷 추가 확보 예정). DDR5 16Gb는 2025년 이전 스크린샷에 컬럼이 없어 "
+                "2023년 구간은 비어 있습니다. 가장 최근 구간은 moneyland.co.kr 일별 API로 자동 이어집니다."
             )
-            palette_hist = {"DDR5 16Gb": "#4f46e5", "DDR4 8Gb": "#ff7f0e"}
+
+            period_option_5 = st.radio(
+                "조회 기간을 선택하세요:", ["전체", "10년", "5년", "3년", "1년"],
+                index=0, horizontal=True, key="dram_hist_period",
+            )
+            if period_option_5 != "전체":
+                start_5 = get_start_date(period_option_5)
+                df_hist = df_hist[df_hist.index >= pd.to_datetime(start_5)]
+
+            palette_hist = {
+                "DDR5 16Gb": "#4f46e5", "DDR4 16Gb": "#0ea5e9",
+                "DDR4 8Gb": "#ff7f0e", "DDR3 4Gb": "#16a34a",
+            }
             fig_hist = go.Figure()
-            for col in monthly.columns:
+            for col in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"]:
+                if col not in df_hist.columns:
+                    continue
+                s = df_hist[col].dropna()
+                if s.empty:
+                    continue
                 fig_hist.add_trace(go.Scatter(
-                    x=monthly.index, y=monthly[col], name=col, mode="lines+markers",
-                    line=dict(color=palette_hist.get(col), width=2), marker=dict(size=6),
+                    x=s.index, y=s.values, name=col, mode="lines",
+                    line=dict(color=palette_hist.get(col), width=2), connectgaps=False,
                 ))
-            latest_month = monthly.index[-1].strftime("%Y-%m")
-            latest_bits = " · ".join(f"{c} ${monthly[c].iloc[-1]:,.2f}" for c in monthly.columns)
+            latest_date = df_hist.index.max()
+            latest_bits = " · ".join(
+                f"{c} ${df_hist[c].dropna().iloc[-1]:,.2f}"
+                for c in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"]
+                if c in df_hist.columns and not df_hist[c].dropna().empty
+            )
             apply_title_and_legend(
                 fig_hist,
-                f"<b>D램 칩 현물가 월평균</b> ({latest_month}: {latest_bits})",
-                height=420,
+                f"<b>D램 칩 현물가 (일별)</b> (최신 {latest_date.strftime('%Y-%m-%d')}: {latest_bits})",
+                height=460,
             )
-            fig_hist.update_yaxes(title_text="현물가 ($/칩)")
-            fig_hist.update_xaxes(title_text="연월")
+            fig_hist.update_yaxes(title_text="현물가 ($/칩)", type="log")
+            fig_hist.update_xaxes(title_text="연도")
             st.plotly_chart(fig_hist, use_container_width=True, config={'scrollZoom': False})
 
-            with st.expander("월평균 원본 값 보기"):
-                table = monthly.copy()
-                table.index = table.index.strftime("%Y-%m")
-                st.dataframe(table.round(3), use_container_width=True)
+            with st.expander("일별 원본 값 보기 (CSV 다운로드)"):
+                table_hist = df_hist.round(3).copy()
+                table_hist.index = table_hist.index.strftime("%Y-%m-%d")
+                st.dataframe(table_hist, use_container_width=True)
+                st.download_button(
+                    "CSV로 다운로드", df_hist.round(4).to_csv().encode("utf-8"),
+                    file_name="dram_price_history.csv", mime="text/csv",
+                )
 
     st.subheader("💾 D램 현물 가격 추이 (세대별 대표 SKU · 구글 시트 연동)")
     st.info("💡 구글 시트에 실시간 연동된 D램 세션 평균가를 세대별(DDR5/DDR4/DDR3) 대표 SKU 기준으로 시각화합니다.")
