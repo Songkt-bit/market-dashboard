@@ -1367,13 +1367,65 @@ def get_single_index_close(ticker: str, start_date_str: str):
     return close.iloc[:, 0]
 
 
+# ---------------------------------------------------------------------------
+# Page 11 — 종목별 연도별 수익률(YTD) 가로 막대
+# ---------------------------------------------------------------------------
+def _ytd_symbol_candidates(raw):
+    """입력 티커 → yfinance 후보 심볼들. 숫자로 시작하는 6자리 코드는 한국 종목(코스피 .KS → 코스닥 .KQ 순)."""
+    t = raw.strip().upper()
+    if not t:
+        return []
+    if "." in t or t.startswith("^"):
+        return [t]
+    if len(t) == 6 and t[0].isdigit():
+        return [t + ".KS", t + ".KQ"]
+    return [t]
+
+
+@st.cache_data(ttl=6 * 3600)
+def get_yearly_returns(raw_ticker):
+    """캘린더 연도별 수익률(전년 말 종가 대비, 올해는 YTD). 배당·분할 반영 종가 기준.
+    첫 해는 상장(데이터 시작) 이후 구간이라 partial=True. 반환: (DataFrame, 심볼, 이름) 또는 (None, None, 오류)."""
+    for sym in _ytd_symbol_candidates(raw_ticker):
+        # 야후는 틀린 접미사(.KS/.KQ)에도 같은 코드의 가짜 뮤추얼펀드 시세를 돌려주므로 종목 유형으로 거른다
+        try:
+            info = yf.Ticker(sym).info
+        except Exception:
+            info = {}
+        if info.get("quoteType") == "MUTUALFUND" and sym.endswith((".KS", ".KQ")):
+            continue
+        try:
+            df = yf.download(sym, period="max", auto_adjust=True, progress=False)
+        except Exception:
+            continue
+        if df is None or df.empty:
+            continue
+        close = df["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = close.dropna()
+        if len(close) < 2:
+            continue
+        year_end = close.groupby(close.index.year).last()
+        first_year = int(close.index[0].year)
+        rows = []
+        for y in year_end.index:
+            if y == first_year:
+                base, partial = float(close.iloc[0]), True
+            else:
+                base, partial = float(year_end[y - 1]), False
+            rows.append({"year": int(y), "ret": (float(year_end[y]) / base - 1) * 100, "partial": partial})
+        return pd.DataFrame(rows), sym, info.get("shortName") or sym
+    return None, None, f"'{raw_ticker.strip()}' 시세를 찾지 못했습니다"
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
-    "📶 Page 10: 이평선 상회 비율"
+    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률"
 ])
 
 # ==========================================
@@ -2585,3 +2637,82 @@ with tab10:
     col10a, col10b = st.columns(2)
     _render_breadth_chart(col10a, "S&P 500", sp500_breadth, sp500_cov, "^GSPC", "#1f77b4")
     _render_breadth_chart(col10b, "코스피 200", kospi_breadth, kospi_cov, "^KS11", "#c0392b")
+
+
+# ==========================================
+# [Page 11] 종목 연도별 수익률 (YTD) 가로 막대
+# ==========================================
+with tab11:
+    st.subheader("종목 연도별 수익률 (YTD)")
+    st.caption(
+        "미국·코스피·코스닥 티커를 입력하면 연도별 수익률을 가로 막대로 보여줍니다. 미국은 `AAPL`, 한국은 "
+        "6자리 종목코드 `005930`(코스피는 .KS, 코스닥은 .KQ 자동 판별)을 넣으세요. 쉼표로 여러 종목 비교 가능. "
+        "수익률은 전년 말 종가 대비이며 올해는 YTD, 배당·분할을 반영한 종가 기준입니다."
+    )
+    col_in, col_rng = st.columns([2, 1])
+    ticker_text = col_in.text_input("티커 (쉼표로 구분, 최대 6개)", value="AAPL, 005930", key="ytd_tickers")
+    range_opt = col_rng.radio("기간", ["전체", "20년", "10년", "5년"], horizontal=True, key="ytd_range")
+
+    raw_list = []
+    for t in ticker_text.replace("，", ",").split(","):
+        if t.strip() and t.strip().upper() not in [r.upper() for r in raw_list]:
+            raw_list.append(t.strip())
+    raw_list = raw_list[:6]
+
+    results = []
+    for raw in raw_list:
+        with st.spinner(f"{raw} 불러오는 중…"):
+            dfy, sym, name = get_yearly_returns(raw)
+        if dfy is None:
+            st.warning(name)
+        else:
+            results.append((sym, name, dfy))
+
+    if results:
+        this_year = pd.Timestamp.today().year
+        n_years = {"전체": None, "20년": 20, "10년": 10, "5년": 5}[range_opt]
+        min_year = this_year - n_years + 1 if n_years else 0
+        SERIES_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b", "#17becf"]
+        UP_C, DOWN_C = "#e03131", "#1c7ed6"
+
+        def _ytd_label(y):
+            return f"{y} YTD" if y == this_year else str(y)
+
+        fig_ytd = go.Figure()
+        all_years, partial_years = set(), set()
+        for i, (sym, name, dfy) in enumerate(results):
+            d = dfy[dfy["year"] >= min_year]
+            all_years.update(d["year"])
+            labels = [f"{y} YTD" if y == this_year else f"{y}*" if p else str(y)
+                      for y, p in zip(d["year"], d["partial"])]
+            partial_years.update(y for y, p in zip(d["year"], d["partial"]) if p)
+            colors = ([UP_C if r >= 0 else DOWN_C for r in d["ret"]] if len(results) == 1
+                      else SERIES_COLORS[i % len(SERIES_COLORS)])
+            fig_ytd.add_trace(go.Bar(
+                x=d["ret"], y=[_ytd_label(y) for y in d["year"]], orientation="h", name=f"{name} ({sym})",
+                marker_color=colors, text=[f"{r:+.1f}%" for r in d["ret"]], textposition="outside",
+                cliponaxis=False, customdata=labels,
+                hovertemplate="%{customdata}: %{x:+.1f}%<extra>" + f"{name}</extra>",
+            ))
+        order = [_ytd_label(y) for y in sorted(all_years)]  # 가로 막대는 첫 범주가 아래 → 최신 연도가 위
+        fig_ytd.update_yaxes(type="category", categoryorder="array", categoryarray=order, title_text=None)
+        fig_ytd.update_xaxes(title_text="수익률 (%)", zeroline=True, zerolinecolor="rgba(128,128,128,.6)")
+        fig_ytd.update_layout(
+            barmode="group", height=max(360, 34 * len(order) * len(results) ** 0.8 + 120),
+            margin=dict(l=20, r=60, t=50, b=30),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        )
+        st.plotly_chart(fig_ytd, use_container_width=True, config={'scrollZoom': False})
+        if partial_years:
+            st.caption("상장(데이터 시작) 첫 해(" + ", ".join(str(y) for y in sorted(partial_years))
+                       + ")는 상장 이후 구간만의 수익률이라 해당 연도 전체 수익률이 아닙니다.")
+
+        # 표: 연도 × 종목 (상승 빨강 / 하락 파랑)
+        pivot = pd.DataFrame({f"{name} ({sym})": dfy.set_index("year")["ret"] for sym, name, dfy in results})
+        pivot = pivot[pivot.index >= min_year].sort_index(ascending=False)
+        with st.expander("연도별 수익률 표 보기"):
+            st.dataframe(
+                pivot.style.format("{:+.1f}%", na_rep="-")
+                     .map(lambda v: "" if pd.isna(v) else f"color: {UP_C if v >= 0 else DOWN_C}; font-weight: 600"),
+                use_container_width=True,
+            )
