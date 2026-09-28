@@ -502,8 +502,9 @@ DRAM_PRICE_HISTORY_COLS = {
 
 
 @st.cache_data(ttl=3600)
-def get_dram_price_history_csv():
-    """번들된 텔레그램 채널 스크린샷 기반 일별 현물가. 반환: (DataFrame, error)"""
+def get_dram_price_history_csv(file_mtime=0.0):
+    """번들된 텔레그램 채널 스크린샷 기반 일별 현물가. 반환: (DataFrame, error)
+    file_mtime 은 CSV 를 갱신하면 캐시가 무효화되도록 하는 캐시 키(함수 본문 밖에서 넘긴다)."""
     try:
         df = pd.read_csv(DRAM_PRICE_HISTORY_CSV, parse_dates=["Date"]).set_index("Date")
     except Exception as e:
@@ -1664,7 +1665,11 @@ with tab4:
 # ==========================================
 with tab5:
     with st.expander("📅 D램 현물가(spot) 장기 추이 — 제품별 일별", expanded=True):
-        df_hist, hist_err = get_dram_price_history_csv()
+        try:
+            _csv_mtime = os.path.getmtime(DRAM_PRICE_HISTORY_CSV)
+        except OSError:
+            _csv_mtime = 0.0
+        df_hist, hist_err = get_dram_price_history_csv(_csv_mtime)
         if df_hist.empty:
             st.warning(f"현물가 장기 시계열을 불러오지 못했습니다 — {hist_err}")
         else:
