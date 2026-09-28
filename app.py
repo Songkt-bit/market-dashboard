@@ -487,6 +487,11 @@ def get_dram_csv_data():
 # 서로 일치하는지 확인 후 하나만 남겼고, 2023-09-20처럼 소스 스프레드시트 자체가
 # 날짜를 잘못 찍은 경우(주말 날짜였음)는 이후 스크린샷에서 정정된 라벨로 바꿨습니다.
 #
+# DDR3만은 2025-11-13부터 값을 교체했습니다. TNBfolio 스프레드시트의 'DDR3 4G 512M' 열이
+# 그날부터 실제 DDR3(512x8-1600/1866)가 아니라 DDR4 1Gx8 eTT 값을 담고 있었기 때문입니다
+# (DRAMeXchange 일일 속보 824일치와 대조: 2023-03~2025-11-12는 637일이 소수점까지 일치,
+# 11-13~는 eTT와 일치). 그 이후 구간은 같은 속보(https://www.dramexchange.com 의 Daily
+# Express)가 공개하는 DDR3 평균가로 바꿨고, 속보가 없는 휴장일 4일은 비워뒀습니다.
 # 현재 2023-03-31~2026-09-22가 이어져 있습니다. DDR5 16Gb는 2025-03-07 이전 스크린샷에 컬럼 자체가 없어(당시 DDR5가 주력이
 # 아니었음) 그 이전 구간은 비어 있습니다.
 DRAM_PRICE_HISTORY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dram_price_history.csv")
@@ -515,9 +520,8 @@ def get_dram_sheet_daily():
     것이라 제외, (2) 같은 날짜가 두 번 나오면(시작 첫날에 있었음) 마지막 값만 사용,
     (3) 'eTT'(미검증 다이) 품목은 대표 SKU가 아니므로 제외.
 
-    DDR3는 일부러 뺐습니다. 시트의 'DDR3 4Gb 512Mx8 1600/1866'(≈$13.8)은 위 CSV의
-    'DDR3 4G 512M'(≈$5.8)과 이름은 비슷하지만 다른 품목이라, 이으면 경계에서 값이 두 배
-    넘게 튀는 가짜 점프가 생깁니다. 나머지 세 제품은 겹치는 날짜 값이 정확히 일치합니다."""
+    네 제품 모두 CSV와 겹치는 날짜 값이 정확히 일치합니다(DDR3는 CSV를 DRAMeXchange 실제값으로
+    바로잡은 뒤에 일치 — 아래 CSV 설명 참고)."""
     df = get_dram_csv_data()
     if df.empty or not {"Date", "Item", "Session Average"}.issubset(df.columns):
         return pd.DataFrame()
@@ -526,7 +530,7 @@ def get_dram_sheet_daily():
     df = df.dropna(subset=["Date", "Session Average"])
     items = df["Item"].dropna().unique().tolist()
     cols = {}
-    for label in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb"]:
+    for label in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb", "DDR3 4Gb"]:
         match = next((i for i in items if i.startswith(label) and "eTT" not in i), None)
         if not match:
             continue
@@ -1680,9 +1684,9 @@ with tab5:
                 "'전일비 증감률'과 계산값을 대조해 검증했습니다. 2023-03-31부터 현재까지 이어지며, "
                 "DDR5 16Gb는 2025-03-07부터 값이 있습니다(그 이전 스크린샷에는 컬럼이 없음). "
                 "스크린샷이 끝난 이후는 구글 시트의 일별 세션 평균가가 자동으로 이어 붙어, 시트에 "
-                "하루가 쌓일 때마다 이 차트에도 한 점씩 늘어납니다(주말 반복 행은 제외). 단 DDR3는 시트의 "
-                "품목(1600/1866, ≈\$13.8)이 이 차트의 DDR3(≈\$5.8)와 달라 이어 붙이지 않고, 새 스크린샷을 "
-                "받을 때까지 CSV 끝에서 멈춥니다."
+                "하루가 쌓일 때마다 이 차트에도 한 점씩 늘어납니다(주말 반복 행은 제외). 단, TNBfolio의 "
+                "'DDR3' 열이 2025-11-13부터 DDR4 eTT 값을 담고 있어, 그 이후 DDR3는 DRAMeXchange 일일 속보의 "
+                "실제 DDR3 평균가로 교체했습니다."
             )
 
             period_option_5 = st.radio(
@@ -1725,7 +1729,7 @@ with tab5:
                     if not s.empty:
                         fig_hist.add_trace(go.Scatter(
                             x=s.index, y=s.values, name=c, mode="lines",
-                            line=dict(color=palette_hist.get(c), width=2), connectgaps=False,
+                            line=dict(color=palette_hist.get(c), width=2), connectgaps=True,
                         ))
                 apply_title_and_legend(fig_hist, "<b>현물가 (일별, 로그축)</b>", height=460)
                 fig_hist.update_yaxes(title_text="현물가 ($/칩)", type="log")
@@ -1739,7 +1743,7 @@ with tab5:
                     if not s.empty:
                         fig_yoy.add_trace(go.Scatter(
                             x=s.index, y=s.values, name=c, mode="lines",
-                            line=dict(color=palette_hist.get(c), width=2), connectgaps=False,
+                            line=dict(color=palette_hist.get(c), width=2), connectgaps=True,
                         ))
                 fig_yoy.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.6)
                 apply_title_and_legend(fig_yoy, "<b>전년 동기 대비 (YoY %)</b>", height=460)
