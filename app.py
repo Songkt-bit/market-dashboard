@@ -506,6 +506,36 @@ def get_dram_price_history_csv():
     return df.rename(columns=DRAM_PRICE_HISTORY_COLS).sort_index(), None
 
 
+@st.cache_data(ttl=3600)
+def get_dram_sheet_daily():
+    """구글 시트(Session Average)를 위 CSV와 같은 컬럼의 일별 표로 바꿉니다.
+
+    시트가 매일 한 줄씩 쌓이므로, CSV가 끝난 이후 구간이 이 표로 자동 이어집니다.
+    시트 원본의 사정에 맞춰 세 가지를 정리합니다: (1) 주말 행은 직전 값을 그대로 반복한
+    것이라 제외, (2) 같은 날짜가 두 번 나오면(시작 첫날에 있었음) 마지막 값만 사용,
+    (3) 'eTT'(미검증 다이) 품목은 대표 SKU가 아니므로 제외.
+
+    DDR3는 일부러 뺐습니다. 시트의 'DDR3 4Gb 512Mx8 1600/1866'(≈$13.8)은 위 CSV의
+    'DDR3 4G 512M'(≈$5.8)과 이름은 비슷하지만 다른 품목이라, 이으면 경계에서 값이 두 배
+    넘게 튀는 가짜 점프가 생깁니다. 나머지 세 제품은 겹치는 날짜 값이 정확히 일치합니다."""
+    df = get_dram_csv_data()
+    if df.empty or not {"Date", "Item", "Session Average"}.issubset(df.columns):
+        return pd.DataFrame()
+    df = df.assign(Date=pd.to_datetime(df["Date"], errors="coerce"),
+                   **{"Session Average": pd.to_numeric(df["Session Average"], errors="coerce")})
+    df = df.dropna(subset=["Date", "Session Average"])
+    items = df["Item"].dropna().unique().tolist()
+    cols = {}
+    for label in ["DDR5 16Gb", "DDR4 16Gb", "DDR4 8Gb"]:
+        match = next((i for i in items if i.startswith(label) and "eTT" not in i), None)
+        if not match:
+            continue
+        s = df[df["Item"] == match].set_index("Date")["Session Average"].sort_index()
+        s = s[s.index.weekday < 5]
+        cols[label] = s[~s.index.duplicated(keep="last")]
+    return pd.DataFrame(cols).sort_index()
+
+
 DRAM_SPOT_HISTORY_URL = "https://moneyland.co.kr/moneyweb/api/dram_dashboard.json"
 
 # 시트의 대표 SKU와 같은 품목만 사용 (표기가 미세하게 달라질 수 있어 접두어로 매칭)
@@ -1649,9 +1679,12 @@ with tab5:
         if df_hist.empty:
             st.warning(f"현물가 장기 시계열을 불러오지 못했습니다 — {hist_err}")
         else:
-            # CSV에 없는 날짜(끝난 이후, 중간에 빠진 날)는 moneyland 일별 API로 채웁니다.
-            # moneyland는 DDR5 16Gb·DDR4 8Gb 2종만 있어 나머지 두 컬럼은 그 구간이 빕니다.
-            # CSV에 이미 있는 값은 덮어쓰지 않습니다(combine_first).
+            # CSV에 없는 날짜는 우선순위대로 채웁니다: 구글 시트(4개 제품, 매일 누적) →
+            # moneyland 일별 API(DDR5·DDR4 8Gb만, 시트가 끊겼을 때의 예비). 이미 있는 값은
+            # 덮어쓰지 않습니다(combine_first).
+            df_sheet = get_dram_sheet_daily()
+            if not df_sheet.empty:
+                df_hist = df_hist.combine_first(df_sheet)
             df_live, _ = get_dram_spot_history()
             if not df_live.empty:
                 df_hist = df_hist.combine_first(df_live)
@@ -1661,8 +1694,10 @@ with tab5:
                 "스크린샷을 직접 옮겨 적은 일별 현물가입니다. 값마다 이미지를 확대해 재확인하고 표의 "
                 "'전일비 증감률'과 계산값을 대조해 검증했습니다. 2023-03-31부터 현재까지 이어지며, "
                 "DDR5 16Gb는 2025-03-07부터 값이 있습니다(그 이전 스크린샷에는 컬럼이 없음). "
-                "스크린샷에 없는 최근 날짜는 moneyland.co.kr 일별 API로 자동 채워지고 그 구간은 "
-                "DDR5·DDR4 8Gb만 나옵니다."
+                "스크린샷이 끝난 이후는 구글 시트의 일별 세션 평균가가 자동으로 이어 붙어, 시트에 "
+                "하루가 쌓일 때마다 이 차트에도 한 점씩 늘어납니다(주말 반복 행은 제외). 단 DDR3는 시트의 "
+                "품목(1600/1866, ≈\$13.8)이 이 차트의 DDR3(≈\$5.8)와 달라 이어 붙이지 않고, 새 스크린샷을 "
+                "받을 때까지 CSV 끝에서 멈춥니다."
             )
 
             period_option_5 = st.radio(
@@ -1736,8 +1771,8 @@ with tab5:
                     file_name="dram_price_history.csv", mime="text/csv",
                 )
 
-    st.subheader("💾 D램 현물 가격 추이 (세대별 대표 SKU · 구글 시트 연동)")
-    st.info("💡 구글 시트에 실시간 연동된 D램 세션 평균가를 세대별(DDR5/DDR4/DDR3) 대표 SKU 기준으로 시각화합니다.")
+    st.subheader("💾 최신 D램 현물가 (구글 시트 연동)")
+    st.info("💡 구글 시트에 연동된 최신 세션 평균가입니다. 이 값은 위 차트에도 매일 자동으로 누적됩니다.")
     df_dram = get_dram_csv_data()
     if not df_dram.empty and {'Date', 'Item', 'Session Average'}.issubset(df_dram.columns):
         df_dram['Date'] = pd.to_datetime(df_dram['Date'], errors='coerce')
@@ -1755,7 +1790,6 @@ with tab5:
             "DDR4": "DDR4 8Gb",
             "DDR3": "DDR3 4Gb",
         }
-        palette = {"DDR5": "#4f46e5", "DDR4": "#ff7f0e", "DDR3": "#16a34a"}
 
         unique_items = df_dram['Item'].dropna().unique().tolist()
         REPRESENTATIVE_ITEMS = {}
@@ -1773,7 +1807,6 @@ with tab5:
         # 시트에 이미 'Avg Change'(예: ▲13.04 %)가 있으니, 우리가 따로 전일 대비를 계산하지 않고
         # 원본 값을 그대로 최신 카드에 보여줌 (참고했던 다른 시트처럼 가격+변화율을 나란히)
         metric_cols = st.columns(len(selected_gens)) if selected_gens else []
-        fig = go.Figure()
         for i, gen in enumerate(selected_gens):
             item_name = REPRESENTATIVE_ITEMS[gen]
             sub = df_dram[df_dram['Item'] == item_name].dropna(subset=['Date', 'Session Average']).sort_values('Date')
@@ -1788,14 +1821,6 @@ with tab5:
                     delta=f"{avg_change:+.2f}%" if avg_change is not None else None,
                     help=f"기준일 {latest_row['Date'].strftime('%Y-%m-%d')}",
                 )
-            fig.add_trace(go.Scatter(
-                x=sub['Date'], y=sub['Session Average'],
-                name=f"{gen} ({item_name})", mode='lines+markers',
-                line=dict(color=palette[gen], width=2), marker=dict(size=4),
-            ))
-        apply_title_and_legend(fig, "<b>D램 현물 평균가(Session Average) 추이</b>", height=500)
-        fig.update_yaxes(title_text="가격")
-        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
         with st.expander("SKU 7종 전체 원본 데이터 보기"):
             st.dataframe(df_dram, use_container_width=True)
