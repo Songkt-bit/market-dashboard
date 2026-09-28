@@ -1642,7 +1642,10 @@ with tab4:
     title_text = "<b>미국 국채 만기별 금리</b> (현재: " + " · ".join(latest_parts) + ")"
     apply_title_and_legend(fig, title_text, height=500)
     fig.update_yaxes(title_text="수익률 (%)")
-    fig.update_xaxes(title_text="연도")
+    # x축 범위를 데이터 구간으로 고정: 자동 범위에 맡기면 짧은 기간 선택 시 오른쪽이 수년치 빈 공간으로 늘어남
+    _wins = [_bond_window(sr, period_option_4) for sr in bonds_data.values()]
+    fig.update_xaxes(title_text="연도", autorange=False,
+                     range=[min(w.index[0] for w in _wins), max(w.index[-1] for w in _wins)])
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
     # 선택 기간의 변화: 금리 자체의 변화폭(%p)과 시작 금리 대비 상대 변화율(%)
