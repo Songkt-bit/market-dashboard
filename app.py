@@ -572,21 +572,6 @@ def get_dram_spot_history():
     return pd.DataFrame(cols).sort_index(), None
 
 
-def parse_dram_pct_change(s):
-    """구글 시트의 'Avg Change'/'Low Change' 컬럼(예: '▲13.04 %', '▼2.10 %')을 부호 있는 float로 변환"""
-    if pd.isna(s):
-        return None
-    s = str(s).strip()
-    sign = -1 if ('▼' in s or s.startswith('-')) else 1
-    num = ''.join(ch for ch in s if (ch.isdigit() or ch == '.'))
-    if not num:
-        return None
-    try:
-        return sign * float(num)
-    except ValueError:
-        return None
-
-
 @st.cache_data(ttl=3600)
 def get_samsung_disparity_data(start_date_str):
     df = yf.download(["005930.KS", "005935.KS"], start=start_date_str, progress=False)
@@ -1770,65 +1755,6 @@ with tab5:
                     "CSV로 다운로드", df_hist.round(4).to_csv().encode("utf-8"),
                     file_name="dram_price_history.csv", mime="text/csv",
                 )
-
-    st.subheader("💾 최신 D램 현물가 (구글 시트 연동)")
-    st.info("💡 구글 시트에 연동된 최신 세션 평균가입니다. 이 값은 위 차트에도 매일 자동으로 누적됩니다.")
-    df_dram = get_dram_csv_data()
-    if not df_dram.empty and {'Date', 'Item', 'Session Average'}.issubset(df_dram.columns):
-        df_dram['Date'] = pd.to_datetime(df_dram['Date'], errors='coerce')
-        df_dram['Session Average'] = pd.to_numeric(df_dram['Session Average'], errors='coerce')
-
-        # 시트가 한 행 = (날짜, SKU 하나) 롱포맷이라 SKU 7종이 다 섞여 있음.
-        # 세대별로 하나씩만 대표 SKU를 골라서 비교 가능하게 함.
-        # Spot Price로 바뀌면서 TrendForce 품목 표기가 달라졌고(공백/괄호 등), 앞으로도
-        # eTT 유무 등으로 표기가 미세하게 흔들릴 수 있어서, 완전 일치 대신 세대별
-        # 접두어로 첫 번째 매칭 품목을 자동으로 찾도록 합니다.
-        # (원하는 SKU가 다르면 아래 REPRESENTATIVE_ITEM_PREFIXES 값만 바꾸면 됨.
-        #  df_dram['Item'].unique()로 전체 품목 목록 확인 가능)
-        REPRESENTATIVE_ITEM_PREFIXES = {
-            "DDR5": "DDR5 16Gb",
-            "DDR4": "DDR4 8Gb",
-            "DDR3": "DDR3 4Gb",
-        }
-
-        unique_items = df_dram['Item'].dropna().unique().tolist()
-        REPRESENTATIVE_ITEMS = {}
-        for gen, prefix in REPRESENTATIVE_ITEM_PREFIXES.items():
-            match = next((it for it in unique_items if it.startswith(prefix)), None)
-            if match:
-                REPRESENTATIVE_ITEMS[gen] = match
-
-        available_gens = list(REPRESENTATIVE_ITEMS.keys())
-        selected_gens = st.multiselect(
-            "표시할 세대 선택:", options=available_gens, default=available_gens,
-            key="dram_gen_select"
-        )
-
-        # 시트에 이미 'Avg Change'(예: ▲13.04 %)가 있으니, 우리가 따로 전일 대비를 계산하지 않고
-        # 원본 값을 그대로 최신 카드에 보여줌 (참고했던 다른 시트처럼 가격+변화율을 나란히)
-        metric_cols = st.columns(len(selected_gens)) if selected_gens else []
-        for i, gen in enumerate(selected_gens):
-            item_name = REPRESENTATIVE_ITEMS[gen]
-            sub = df_dram[df_dram['Item'] == item_name].dropna(subset=['Date', 'Session Average']).sort_values('Date')
-            if sub.empty:
-                continue
-            latest_row = sub.iloc[-1]
-            avg_change = parse_dram_pct_change(latest_row.get('Avg Change'))
-            with metric_cols[i]:
-                st.metric(
-                    f"{gen} ({item_name})",
-                    f"{latest_row['Session Average']:,.2f}",
-                    delta=f"{avg_change:+.2f}%" if avg_change is not None else None,
-                    help=f"기준일 {latest_row['Date'].strftime('%Y-%m-%d')}",
-                )
-
-        with st.expander("SKU 7종 전체 원본 데이터 보기"):
-            st.dataframe(df_dram, use_container_width=True)
-    elif not df_dram.empty:
-        st.caption("시트 컬럼 구성이 예상(Date/Item/Session Average)과 달라 자동 차트를 그리지 못했습니다. 아래 원본 표를 확인해주세요.")
-        st.dataframe(df_dram, use_container_width=True)
-    else:
-        st.warning("구글 시트 데이터를 불러오지 못했습니다.")
 
 # ==========================================
 # [Page 6] 삼성전자 주가 & 괴리율 통합 차트 (음영 오버레이 완벽 복원)
