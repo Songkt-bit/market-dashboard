@@ -1614,16 +1614,56 @@ with tab4:
     bonds_data = get_us_bonds_data()
     BOND_COLORS = {"5년물": "#1f77b4", "10년물": "#ff7f0e", "30년물": "#2ca02c"}
 
+    BOND_PERIODS = {"전체": None, "20년": pd.DateOffset(years=20), "10년": pd.DateOffset(years=10),
+                    "5년": pd.DateOffset(years=5), "3년": pd.DateOffset(years=3),
+                    "1년": pd.DateOffset(years=1), "6개월": pd.DateOffset(months=6),
+                    "3개월": pd.DateOffset(months=3), "1개월": pd.DateOffset(months=1)}
+    period_option_4 = st.radio("조회 기간을 선택하세요:", list(BOND_PERIODS), index=0,
+                               horizontal=True, key="bond_period")
+
+    def _bond_window(series, period):
+        """기간 시작일 이후 구간(시작일 이전 마지막 값은 포함하지 않고 첫 거래일부터)."""
+        offset = BOND_PERIODS[period]
+        if offset is None:
+            return series
+        return series[series.index >= series.index[-1] - offset]
+
+    def _bond_change(series, period):
+        w = _bond_window(series, period)
+        start, end = float(w.iloc[0]), float(series.iloc[-1])
+        return start, end, end - start, (end / start - 1) * 100 if start else float("nan")
+
     fig = go.Figure()
     latest_parts = []
     for name, series in bonds_data.items():
-        fig.add_trace(go.Scatter(x=series.index, y=series.values, name=name, line=dict(color=BOND_COLORS.get(name), width=2)))
+        w = _bond_window(series, period_option_4)
+        fig.add_trace(go.Scatter(x=w.index, y=w.values, name=name, line=dict(color=BOND_COLORS.get(name), width=2)))
         latest_parts.append(f"{name} {series.iloc[-1]:.3f}%")
     title_text = "<b>미국 국채 만기별 금리</b> (현재: " + " · ".join(latest_parts) + ")"
     apply_title_and_legend(fig, title_text, height=500)
     fig.update_yaxes(title_text="수익률 (%)")
     fig.update_xaxes(title_text="연도")
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
+
+    # 선택 기간의 변화: 금리 자체의 변화폭(%p)과 시작 금리 대비 상대 변화율(%)
+    cols_chg = st.columns(len(bonds_data))
+    for col, (name, series) in zip(cols_chg, bonds_data.items()):
+        start, end, diff, rel = _bond_change(series, period_option_4)
+        col.metric(f"{name} · {period_option_4} 변화", f"{end:.3f}%",
+                   f"{diff:+.3f}%p ({rel:+.1f}%)", delta_color="off")
+        col.caption(f"기간 시작 {start:.3f}% → 현재 {end:.3f}%")
+    with st.expander("기간별 변화율 한눈에 보기 (금리 변화폭 %p / 상대 변화율 %)"):
+        rows = []
+        for period in BOND_PERIODS:
+            if period == "전체":
+                continue
+            row = {"기간": period}
+            for name, series in bonds_data.items():
+                _, _, diff, rel = _bond_change(series, period)
+                row[name] = f"{diff:+.2f}%p ({rel:+.1f}%)"
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows).set_index("기간"), use_container_width=True)
+        st.caption("상대 변화율 = 현재 금리 / 기간 시작 금리 − 1. 금리는 이미 %이므로 변화폭은 %p로 함께 표기합니다.")
 
     # 장단기 금리차(10Y-2Y) — FRED의 T10Y2Y와 같은 정의. 단기물이 정책금리에 민감하게
     # 움직이는 반면 장기물은 장기 성장·물가 기대치를 반영해 완만하다는 비대칭을
