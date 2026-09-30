@@ -1765,44 +1765,48 @@ with tab4:
         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
 
     with col_bond_stats:
-        # 선택 기간의 변화: 금리 변화폭(%p)과 시작 금리 대비 상대 변화율(%)
-        st.markdown(f"**{period_option_4} 변화** — 기간 시작 대비 현재 금리")
-        cards = []
-        for name, series in bonds_data.items():
-            start, end, diff, rel = _bond_change(series, period_option_4)
-            c = _chg_color(diff)
-            arrow = "▲" if diff > 0 else "▼" if diff < 0 else "―"
-            cards.append(
-                f'<div style="flex:1;min-width:150px;border:1px solid rgba(128,128,128,.35);'
-                f'border-left:6px solid {BOND_COLORS.get(name)};border-radius:10px;padding:12px 14px;">'
-                f'<div style="font-size:14px;opacity:.75;">{name}</div>'
-                f'<div style="font-size:26px;font-weight:700;">{end:.3f}%</div>'
-                f'<div style="font-size:22px;font-weight:800;color:{c};">{arrow} {rel:+.1f}%</div>'
-                f'<div style="font-size:15px;font-weight:600;color:{c};">{diff:+.3f}%p</div>'
-                f'<div style="font-size:12px;opacity:.65;margin-top:4px;">시작 {start:.3f}% → 현재 {end:.3f}%</div>'
-                f'</div>'
-            )
-        st.markdown('<div style="display:flex;gap:12px;flex-wrap:wrap;">' + "".join(cards) + '</div>',
-                    unsafe_allow_html=True)
+        col_bond_cards, col_bond_table = st.columns([1, 2])
 
-        # 모든 기간 한눈에 보기 (상승 빨강 / 하락 파랑)
-        head = "".join(f'<th style="padding:6px 10px;text-align:right;">{n}</th>' for n in bonds_data)
-        body = ""
-        for period in BOND_PERIODS:
-            if period == "전체":
-                continue
-            tds = ""
+        with col_bond_cards:
+            # 선택 기간의 변화: 금리 변화폭(%p)과 시작 금리 대비 상대 변화율(%). 왼쪽에 세로로 쌓아
+            # 정보 밀도를 높이고, 오른쪽 표에 가로 공간을 더 내준다.
+            st.markdown(f"**{period_option_4} 변화**")
             for name, series in bonds_data.items():
-                _, _, diff, rel = _bond_change(series, period)
-                tds += (f'<td style="padding:6px 10px;text-align:right;color:{_chg_color(diff)};font-weight:600;">'
-                        f'{rel:+.1f}% <span style="font-weight:400;opacity:.85;">({diff:+.2f}%p)</span></td>')
-            hl = "background:rgba(128,128,128,.15);" if period == period_option_4 else ""
-            body += (f'<tr style="{hl}"><td style="padding:6px 10px;font-weight:600;">{period}</td>{tds}</tr>')
-        st.markdown(
-            '<div style="margin-top:14px;font-size:14px;"><table style="width:100%;border-collapse:collapse;">'
-            f'<thead><tr style="border-bottom:1px solid rgba(128,128,128,.4);"><th style="padding:6px 10px;text-align:left;">기간별 변화율</th>{head}</tr></thead>'
-            f'<tbody>{body}</tbody></table></div>', unsafe_allow_html=True)
-        st.caption("변화율 = 현재 금리 / 기간 시작 금리 − 1, 괄호는 금리 변화폭(%p). 상승 빨강 · 하락 파랑.")
+                start, end, diff, rel = _bond_change(series, period_option_4)
+                c = _chg_color(diff)
+                arrow = "▲" if diff > 0 else "▼" if diff < 0 else "―"
+                st.markdown(
+                    f'<div style="border:1px solid rgba(128,128,128,.35);'
+                    f'border-left:6px solid {BOND_COLORS.get(name)};border-radius:10px;'
+                    f'padding:10px 12px;margin-bottom:10px;">'
+                    f'<div style="font-size:13px;opacity:.75;">{name}</div>'
+                    f'<div style="font-size:22px;font-weight:700;">{end:.3f}%</div>'
+                    f'<div style="font-size:18px;font-weight:800;color:{c};">{arrow} {rel:+.1f}%</div>'
+                    f'<div style="font-size:13px;font-weight:600;color:{c};">{diff:+.3f}%p</div>'
+                    f'<div style="font-size:11px;opacity:.65;margin-top:2px;">시작 {start:.3f}% → 현재 {end:.3f}%</div>'
+                    f'</div>', unsafe_allow_html=True,
+                )
+
+        with col_bond_table:
+            # 모든 기간 한눈에 보기 (상승 빨강 / 하락 파랑)
+            st.markdown("**기간별 변화율 한눈에 보기**")
+            head = "".join(f'<th style="padding:6px 10px;text-align:right;">{n}</th>' for n in bonds_data)
+            body = ""
+            for period in BOND_PERIODS:
+                if period == "전체":
+                    continue
+                tds = ""
+                for name, series in bonds_data.items():
+                    _, _, diff, rel = _bond_change(series, period)
+                    tds += (f'<td style="padding:6px 10px;text-align:right;color:{_chg_color(diff)};font-weight:600;">'
+                            f'{rel:+.1f}% <span style="font-weight:400;opacity:.85;">({diff:+.2f}%p)</span></td>')
+                hl = "background:rgba(128,128,128,.15);" if period == period_option_4 else ""
+                body += (f'<tr style="{hl}"><td style="padding:6px 10px;font-weight:600;">{period}</td>{tds}</tr>')
+            st.markdown(
+                '<div style="font-size:14px;"><table style="width:100%;border-collapse:collapse;">'
+                f'<thead><tr style="border-bottom:1px solid rgba(128,128,128,.4);"><th style="padding:6px 10px;text-align:left;">기간</th>{head}</tr></thead>'
+                f'<tbody>{body}</tbody></table></div>', unsafe_allow_html=True)
+            st.caption("변화율 = 현재 금리 / 기간 시작 금리 − 1, 괄호는 금리 변화폭(%p). 상승 빨강 · 하락 파랑.")
 
     # 장단기 금리차(10Y-2Y) — FRED의 T10Y2Y와 같은 정의. 단기물이 정책금리에 민감하게
     # 움직이는 반면 장기물은 장기 성장·물가 기대치를 반영해 완만하다는 비대칭을
