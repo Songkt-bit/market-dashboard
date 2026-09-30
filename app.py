@@ -10,6 +10,7 @@ import io
 import json
 import os
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 # ---------------------------------------------------------------------------
@@ -726,14 +727,22 @@ def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
 # 처음엔 즐겨찾기한 지표마다 통계표코드를 직접 매핑해서 우리 차트에 스파크라인을
 # 그리려 했는데, 지표 하나하나 검색→선택→확인하는 과정이 너무 번거로웠음.
 # 대신 한국은행이 이미 만들어둔 '금융·경제 스냅샷'(snapshot.bok.or.kr) 공식
-# 차트로 바로 연결하는 쪽으로 바꿈 — 다만 이 사이트는 완전한 JS 앱이라 지표명으로
-# 특정 차트에 URL 하나로 바로 딥링크하는 공식 방법은 확인되지 않았고, 그래서
-# 지표명을 복사해서 그 사이트 검색창에 붙여넣는 방식으로 감. 이러면 통계표코드를
+# 차트로 바로 연결하는 쪽으로 바꿈. snapshot.bok.or.kr/search/<검색어>가 실제로
+# 동작하는 딥링크임을 확인해서(새 탭에 그 URL만 직접 열어도 검색 결과가 바로 뜸),
+# 지표명을 URL 인코딩해 그 검색 결과 페이지로 바로 연결한다. 이러면 통계표코드를
 # 몰라도 되고, 우리가 관리해야 할 매핑도 없어서 훨씬 가볍고 안정적임.
+# 또한 이 즐겨찾기 섹션은 ECOS Open API(KeyStatisticList 등)와 완전히 무관하게
+# 동작한다 — snapshot.bok.or.kr은 API 키도, ECOS Open API 호출도 필요 없는 별개의
+# 공개 웹사이트라서, ECOS Open API가 네트워크 차단 등으로 실패해도(Streamlit Cloud
+# 서버에서 ecos.bok.or.kr로의 접속이 막히는 사례가 있었음) 이 섹션은 항상 쓸 수 있다.
 # 즐겨찾기 자체는 로컬 JSON 파일에 지표명만 저장 — 앱을 재배포하면 초기화될 수 있음.
 ECOS_FAVORITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecos_favorites.json")
 ECOS_FAVORITES_MAX = 10
-ECOS_SNAPSHOT_URL = "https://snapshot.bok.or.kr/bookmark/"
+
+
+def ecos_snapshot_search_url(keyword: str) -> str:
+    """snapshot.bok.or.kr의 검색 결과 페이지로 바로 연결되는 딥링크."""
+    return f"https://snapshot.bok.or.kr/search/{urllib.parse.quote(keyword.strip())}"
 
 
 def load_ecos_favorites() -> list:
@@ -2269,6 +2278,50 @@ with tab7:
 with tab8:
     st.subheader("🏦 ECOS 매크로 지표 (한국은행 Open API)")
 
+    # -----------------------------------------------------------------
+    # 관심 지표 스냅샷 바로가기 — ECOS Open API와 완전히 무관하게 항상 동작.
+    # 한국은행 공식 '금융·경제 스냅샷'(snapshot.bok.or.kr) 검색 결과 페이지로 바로
+    # 연결하며, API 키도 API 호출도 필요 없다. 아래 ECOS Open API가 막히거나
+    # 실패해도 이 섹션만은 항상 쓸 수 있다.
+    # -----------------------------------------------------------------
+    favorites = load_ecos_favorites()
+    st.markdown(f"#### ⭐ 관심 지표 스냅샷 바로가기 ({len(favorites)}/{ECOS_FAVORITES_MAX})")
+    st.caption(
+        "한국은행 공식 '금융·경제 스냅샷' 사이트 검색 결과로 바로 연결됩니다 — ECOS Open API 없이도 "
+        "항상 동작해요. 지표 이름을 자유롭게 입력해 추가하세요(예: 기준금리, 소비자물가지수, 가계신용)."
+    )
+    col_fav_add1, col_fav_add2 = st.columns([3, 1])
+    new_fav_name = col_fav_add1.text_input(
+        "지표 이름 추가", key="ecos_fav_new", label_visibility="collapsed",
+        placeholder="지표 이름 입력 후 추가 (예: 기준금리)",
+    )
+    if col_fav_add2.button("➕ 즐겨찾기 추가", use_container_width=True):
+        name = new_fav_name.strip()
+        if not name:
+            st.warning("지표 이름을 입력해주세요.")
+        elif name in favorites:
+            st.info("이미 즐겨찾기에 있습니다.")
+        elif len(favorites) >= ECOS_FAVORITES_MAX:
+            st.warning(f"즐겨찾기는 최대 {ECOS_FAVORITES_MAX}개까지예요. 먼저 하나를 해제해주세요.")
+        else:
+            favorites.append(name)
+            save_ecos_favorites(favorites)
+            st.rerun()
+
+    if not favorites:
+        st.caption("아직 즐겨찾기한 지표가 없습니다.")
+    else:
+        cols_fav = st.columns(5)
+        for i, name in enumerate(favorites[:ECOS_FAVORITES_MAX]):
+            with cols_fav[i % 5]:
+                st.caption(name)
+                st.link_button("🔗 스냅샷에서 보기", ecos_snapshot_search_url(name), use_container_width=True)
+                if st.button("즐겨찾기 해제", key=f"ecos_unfav_{name}", use_container_width=True):
+                    favorites.remove(name)
+                    save_ecos_favorites(favorites)
+                    st.rerun()
+    st.divider()
+
     if not ECOS_API_KEY:
         st.error(
             "ECOS_API_KEY가 설정되어 있지 않습니다. "
@@ -2290,39 +2343,11 @@ with tab8:
                                "Streamlit Cloud의 Settings → Secrets에 정확히 등록돼 있는지, 활용신청이 "
                                "승인됐는지 확인해주세요.")
             else:
-                st.caption(f"한국은행 ECOS '100대 통계지표' 기준 · 총 {len(df_key)}개 항목")
+                st.caption(f"한국은행 ECOS '100대 통계지표' 기준 · 총 {len(df_key)}개 항목 · "
+                           "⭐ 즐겨찾기는 위쪽 '관심 지표 스냅샷 바로가기'에서 관리합니다.")
 
                 favorites = load_ecos_favorites()
 
-                # -----------------------------------------------------
-                # 지금 주목 — 즐겨찾기한 지표만 (최대 10개)
-                # 자체 스파크라인 대신, 한국은행 공식 '금융·경제 스냅샷' 차트로 바로
-                # 연결. 지표명을 복사해서 스냅샷 검색창에 붙여넣으면 공식 차트가 뜸.
-                # -----------------------------------------------------
-                st.markdown(f"#### 지금 주목 · 즐겨찾기 ({len(favorites)}/{ECOS_FAVORITES_MAX})")
-                if not favorites:
-                    st.caption("아직 즐겨찾기한 지표가 없습니다. 아래 '그룹별 보기' 표에서 ⭐ 체크박스를 눌러 추가해보세요.")
-                else:
-                    st.caption("지표명을 복사(아이콘 클릭)해서 스냅샷 검색창에 붙여넣으면 한국은행 공식 추이 차트를 볼 수 있어요.")
-                    cols_fav = st.columns(5)
-                    for i, name in enumerate(favorites[:ECOS_FAVORITES_MAX]):
-                        row_match = df_key[df_key["지표명"] == name]
-                        with cols_fav[i % 5]:
-                            st.caption(name)
-                            if not row_match.empty:
-                                r0 = row_match.iloc[0]
-                                st.markdown(f"**{r0['값']:,.2f}** {r0['단위']}")
-                                st.caption(f"기준 {r0['시점']}")
-                            else:
-                                st.markdown("**—**")
-                            st.code(name, language=None)
-                            st.link_button("🔗 스냅샷에서 보기", ECOS_SNAPSHOT_URL, use_container_width=True)
-                            if st.button("즐겨찾기 해제", key=f"ecos_unfav_{name}", use_container_width=True):
-                                favorites.remove(name)
-                                save_ecos_favorites(favorites)
-                                st.rerun()
-
-                st.divider()
                 st.markdown("#### 그룹별 보기")
                 for grp, sub in df_key.groupby("그룹"):
                     with st.expander(f"{grp} ({len(sub)}종)"):
