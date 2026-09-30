@@ -64,8 +64,8 @@ except Exception as e:
     PYKRX_IMPORT_ERROR = f"{type(e).__name__}: {e}"
 
 # 1. 웹페이지 기본 설정
-st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
-st.title("📊 Daily Market & Macro Dashboard")
+st.set_page_config(page_title="잡동사니 모음집", layout="wide")
+st.title("잡동사니 모음집")
 
 # 탭이 12개(+Page 8 내부 2개)로 늘어나면서 한 줄에 다 안 들어가 가로 스크롤이 생기는
 # 문제를 CSS로 줄바꿈(wrap) 처리해 해결. 스크롤 대신 탭이 2~3줄로 나뉘어 표시됨.
