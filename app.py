@@ -1903,9 +1903,33 @@ with tab5:
                 f"최신 {latest_date.strftime('%Y-%m-%d')} · "
                 + " · ".join(f"{c} \\${df_hist[c].dropna().iloc[-1]:,.2f}" for c in skus)  # \$: 마크다운 수식 방지
             )
+
+            # 카드뉴스: 최신가가 얼마나 유의미한지 — 전주/전월/전분기 대비 변화율과 이 데이터 구간
+            # (2023-03-31~) 내 최고가 대비 위치. 기간 라디오와 무관하게 항상 df_hist(필터 전) 기준으로
+            # 계산해야 "1년" 등 짧은 기간을 선택해도 전월 비교가 잘리지 않음.
+            def _lookback_change(s, days, tol_days=12):
+                target = latest_date - pd.Timedelta(days=days)
+                prior_idx = s.index[s.index <= target]
+                if prior_idx.empty or (target - prior_idx[-1]).days > tol_days:
+                    return None
+                base = float(s.loc[prior_idx[-1]])
+                return (float(s.iloc[-1]) / base - 1) * 100 if base else None
+
+            UP_C5, DOWN_C5 = "#e03131", "#1c7ed6"
+            HORIZONS_5 = [("1주", 7), ("1개월", 30), ("3개월", 91)]
+
+            momentum = {}
+            for c in skus:
+                s = df_hist[c].dropna()
+                chips = [(label, _lookback_change(s, days)) for label, days in HORIZONS_5]
+                peak = s.max()
+                latest_val = float(s.iloc[-1])
+                off_peak = (latest_val / peak - 1) * 100 if peak else None
+                momentum[c] = {"chips": chips, "off_peak": off_peak, "is_peak": latest_val >= peak}
+
             x_range_5 = [df_hist.index.min(), latest_date]  # 두 차트의 x축을 맞춤
 
-            col_price, col_yoy = st.columns(2)
+            col_price, col_yoy, col_card = st.columns([5, 5, 4])
             with col_price:
                 fig_hist = go.Figure()
                 for c in skus:
@@ -1934,6 +1958,40 @@ with tab5:
                 fig_yoy.update_yaxes(title_text="YoY (%)", ticksuffix="%")
                 fig_yoy.update_xaxes(range=x_range_5)
                 st.plotly_chart(fig_yoy, use_container_width=True, config={'scrollZoom': False})
+
+            with col_card:
+                st.markdown("**📰 최신가 카드뉴스**")
+                mom_1m = {c: m["chips"][1][1] for c, m in momentum.items() if m["chips"][1][1] is not None}
+                if mom_1m:
+                    top_c = max(mom_1m, key=mom_1m.get)
+                    st.info(
+                        f"최근 1개월간 **{top_c}**가 {mom_1m[top_c]:+.1f}%로 4개 제품 중 가장 크게 움직였습니다.",
+                        icon="💡",
+                    )
+                for c in skus:
+                    m = momentum[c]
+                    latest_val = df_hist[c].dropna().iloc[-1]
+                    chip_html = "".join(
+                        f'<span style="margin-right:10px;">{label} '
+                        f'<b style="color:{UP_C5 if v is not None and v > 0 else DOWN_C5 if v is not None and v < 0 else "#868e96"};">'
+                        f'{f"{v:+.1f}%" if v is not None else "n/a"}</b></span>'
+                        for label, v in m["chips"]
+                    )
+                    peak_note = (
+                        '<span style="color:#e03131;font-weight:600;">2023년 이후 최고가 경신 중</span>'
+                        if m["is_peak"] else
+                        (f'2023년 이후 최고가 대비 {m["off_peak"]:+.1f}%' if m["off_peak"] is not None else "")
+                    )
+                    st.markdown(
+                        f'<div style="border:1px solid rgba(128,128,128,.35);border-left:6px solid '
+                        f'{palette_hist.get(c)};border-radius:10px;padding:10px 12px;margin-bottom:10px;">'
+                        f'<div style="font-size:13px;opacity:.75;">{c}</div>'
+                        f'<div style="font-size:20px;font-weight:700;">${latest_val:,.2f}</div>'
+                        f'<div style="font-size:13px;margin:4px 0;">{chip_html}</div>'
+                        f'<div style="font-size:12px;opacity:.8;">{peak_note}</div>'
+                        f'</div>', unsafe_allow_html=True,
+                    )
+                st.caption("전주·전월·전분기 대비는 정확히 그 날짜의 값이 없으면 가장 가까운 이전 거래일(최대 12일 전)로 대체합니다.")
 
             with st.expander("일별 원본 값 보기 (CSV 다운로드)"):
                 table_hist = df_hist.round(3).copy()
