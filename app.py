@@ -3005,30 +3005,32 @@ with tab12:
 
         st.divider()
 
-        # ── 만기별 장기 추이 ──
-        c_term, c_per = st.columns([2, 3])
-        term_sel = c_term.radio("만기", AUCTION_TERMS, index=AUCTION_TERMS.index("10-Year"),
-                                horizontal=True, key="auc_term")
-        per_sel = c_per.radio("기간", ["전체", "20년", "10년", "5년", "3년", "1년"], index=0,
-                              horizontal=True, key="auc_period")
-        d = auc[auc["security_term"] == term_sel]
-        if per_sel != "전체":
-            d = d[d["auction_date"] >= d["auction_date"].max() - pd.DateOffset(years=int(per_sel[:-1]))]
+        # ── 만기별 장기 추이 ── 화면 왼쪽 절반만 사용, 오른쪽은 추후 사용을 위해 비워 둠
+        col_auc, col_auc_spare = st.columns([1, 1])
+        with col_auc:
+            c_term, c_per = st.columns([2, 3])
+            term_sel = c_term.radio("만기", AUCTION_TERMS, index=AUCTION_TERMS.index("10-Year"),
+                                    horizontal=True, key="auc_term")
+            per_sel = c_per.radio("기간", ["전체", "20년", "10년", "5년", "3년", "1년"], index=0,
+                                  horizontal=True, key="auc_period")
+            d = auc[auc["security_term"] == term_sel]
+            if per_sel != "전체":
+                d = d[d["auction_date"] >= d["auction_date"].max() - pd.DateOffset(years=int(per_sel[:-1]))]
 
-        fig_a = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                              subplot_titles=("응찰배율 (배)", "간접입찰 비중 (%)"))
-        for r, (key, color) in enumerate([("btc", "#1f77b4"), ("indirect", "#2ca02c")], start=1):
-            dd = d.dropna(subset=[key])
-            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key], mode="markers", name="개별 입찰",
-                                       marker=dict(size=5, color=color, opacity=0.45), showlegend=False,
-                                       hovertemplate="%{x|%Y-%m-%d}: %{y:.2f}<extra></extra>"), row=r, col=1)
-            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key].rolling(8, min_periods=1).mean(),
-                                       mode="lines", line=dict(color="#e8590c", width=2), name="8회 이동평균",
-                                       showlegend=(r == 1), hoverinfo="skip"), row=r, col=1)
-        fig_a.update_layout(height=560, margin=dict(l=20, r=20, t=40, b=20),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1))
-        st.plotly_chart(fig_a, use_container_width=True, config={"scrollZoom": False})
-        st.caption("점 = 개별 입찰, 주황선 = 최근 8회 이동평균. 간접입찰은 2008년 4월 이전 데이터가 없어 그 이전 구간은 비어 있습니다.")
+            fig_a = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                                  subplot_titles=("응찰배율 (배)", "간접입찰 비중 (%)"))
+            for r, (key, color) in enumerate([("btc", "#1f77b4"), ("indirect", "#2ca02c")], start=1):
+                dd = d.dropna(subset=[key])
+                fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key], mode="markers", name="개별 입찰",
+                                           marker=dict(size=5, color=color, opacity=0.45), showlegend=False,
+                                           hovertemplate="%{x|%Y-%m-%d}: %{y:.2f}<extra></extra>"), row=r, col=1)
+                fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key].rolling(8, min_periods=1).mean(),
+                                           mode="lines", line=dict(color="#e8590c", width=2), name="8회 이동평균",
+                                           showlegend=(r == 1), hoverinfo="skip"), row=r, col=1)
+            fig_a.update_layout(height=560, margin=dict(l=20, r=20, t=40, b=20),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1))
+            st.plotly_chart(fig_a, use_container_width=True, config={"scrollZoom": False})
+            st.caption("점 = 개별 입찰, 주황선 = 최근 8회 이동평균. 간접입찰은 2008년 4월 이전 데이터가 없어 그 이전 구간은 비어 있습니다.")
 
         with st.expander(f"{term_sel} 최근 입찰 20건 보기"):
             recent = auc[auc["security_term"] == term_sel].tail(20).iloc[::-1]
