@@ -1941,6 +1941,17 @@ with tab5:
                         ))
                 apply_title_and_legend(fig_hist, "<b>현물가 (일별, 로그축)</b>", height=460)
                 fig_hist.update_yaxes(title_text="현물가 ($/칩)", type="log")
+                # Plotly 로그축 기본 눈금은 소수(10~100 구간)를 "2,3,4…9"처럼 자릿수만 줄여 표시해
+                # 실제로 20/30/…/90인지 헷갈립니다. 각 자리(1~9 × 10^n)에 전체 숫자를 직접 붙입니다.
+                _all_vals = pd.concat([df_hist[c].dropna() for c in skus]) if skus else pd.Series(dtype=float)
+                if not _all_vals.empty:
+                    _p_lo = math.floor(math.log10(_all_vals.min()))
+                    _p_hi = math.ceil(math.log10(_all_vals.max()))
+                    _tickvals = [d * 10 ** p for p in range(_p_lo, _p_hi + 1) for d in range(1, 10)]
+                    fig_hist.update_yaxes(
+                        tickmode="array", tickvals=_tickvals,
+                        ticktext=[f"{v:,.0f}" if v >= 1 else f"{v:g}" for v in _tickvals],
+                    )
                 fig_hist.update_xaxes(range=x_range_5)
                 st.plotly_chart(fig_hist, use_container_width=True, config={'scrollZoom': False})
 
