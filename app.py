@@ -2817,8 +2817,16 @@ with tab11:
 
             fig_ytd = go.Figure()
             all_years, partial_years = set(), set()
-            all_rets = [r for _, _, dfy in results for r in dfy[dfy["year"] >= min_year]["ret"]]
-            cap_w = max(0.6, 0.012 * (max(all_rets) - min(all_rets))) if all_rets else 0.6
+
+            # 막대 입체감을 "끝부분"이 아니라 "아랫부분"에 주기 위해, 자동 그룹 배치 대신
+            # 막대 위치·두께를 직접 계산해 각 막대의 바닥 가장자리에 짙은 색 그림자 띠를 붙인다.
+            BAR_GAP, GROUP_GAP = 0.25, 0.15
+            n_series = len(results)
+            usable = 1 - BAR_GAP
+            per_group_w = usable / n_series
+            bar_w = per_group_w * (1 - GROUP_GAP)
+            shadow_w = bar_w * 0.16
+
             for i, (sym, name, dfy) in enumerate(results):
                 d = dfy[dfy["year"] >= min_year]
                 all_years.update(d["year"])
@@ -2829,20 +2837,22 @@ with tab11:
                           else [SERIES_COLORS[i % len(SERIES_COLORS)]] * len(d))
                 edge_colors = [_darken(c) for c in colors]
                 y_labels = [_ytd_label(y) for y in d["year"]]
+                bar_offset = -usable / 2 + i * per_group_w + (per_group_w - bar_w) / 2
                 fig_ytd.add_trace(go.Bar(
                     x=d["ret"], y=y_labels, orientation="h", name=f"{name} ({sym})",
+                    width=bar_w, offset=bar_offset,
                     marker=dict(color=colors, line=dict(color=edge_colors, width=1.5)),
                     text=[f"<b>{r:+.1f}%</b>" for r in d["ret"]], textposition="outside",
                     textfont=dict(size=14, color="#1a1a1a"),
-                    cliponaxis=False, customdata=labels, offsetgroup=str(i),
+                    cliponaxis=False, customdata=labels,
                     hovertemplate="%{customdata}: %{x:+.1f}%<extra>" + f"{name}</extra>",
                 ))
-                # 막대 끝 엣지 — 더 짙은 색 캡을 살짝 덧붙여 입체감(3D 베벨) 표현
-                cap_x = [math.copysign(min(cap_w, abs(r)), r) if r else 0 for r in d["ret"]]
+                # 막대 바닥 가장자리 — 짙은 색 얇은 띠로 그림자를 표현(입체감)
                 fig_ytd.add_trace(go.Bar(
-                    x=cap_x, y=y_labels, base=[r - cx for r, cx in zip(d["ret"], cap_x)],
-                    orientation="h", marker=dict(color=edge_colors, line=dict(width=0)),
-                    offsetgroup=str(i), showlegend=False, hoverinfo="skip",
+                    x=d["ret"], y=y_labels, orientation="h",
+                    width=shadow_w, offset=bar_offset,
+                    marker=dict(color=edge_colors, line=dict(width=0)),
+                    showlegend=False, hoverinfo="skip",
                 ))
             order = [_ytd_label(y) for y in sorted(all_years)]  # 가로 막대는 첫 범주가 아래 → 최신 연도가 위
             fig_ytd.update_yaxes(type="category", categoryorder="array", categoryarray=order,
