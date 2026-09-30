@@ -67,7 +67,7 @@ except Exception as e:
 st.set_page_config(page_title="Market & Macro Dashboard", layout="wide")
 st.title("📊 Daily Market & Macro Dashboard")
 
-# 탭이 11개(+Page 8 내부 2개)로 늘어나면서 한 줄에 다 안 들어가 가로 스크롤이 생기는
+# 탭이 12개(+Page 8 내부 2개)로 늘어나면서 한 줄에 다 안 들어가 가로 스크롤이 생기는
 # 문제를 CSS로 줄바꿈(wrap) 처리해 해결. 스크롤 대신 탭이 2~3줄로 나뉘어 표시됨.
 # (Streamlit 최신 버전은 탭을 BaseWeb이 아니라 react-aria 기반 [role="tablist"]로
 # 렌더링하므로 data-baseweb 셀렉터가 아니라 이 쪽을 타겟해야 함)
@@ -1419,13 +1419,69 @@ def get_yearly_returns(raw_ticker):
     return None, None, f"'{raw_ticker.strip()}' 시세를 찾지 못했습니다"
 
 
+# ---------------------------------------------------------------------------
+# Page 12 — 미국 국채 입찰 결과 (응찰배율 · 간접입찰 비중)
+# ---------------------------------------------------------------------------
+# 재무부 Fiscal Data API(무료, 키 불필요)의 auctions_query를 씁니다.
+# Treasury 발표 기준인 '경쟁입찰(comp)' 값으로 계산합니다. total_* 값은 연준(SOMA)의
+# 만기 재투자 물량이 섞여 있어 발표 수치와 달라집니다.
+#   응찰배율 = comp_tendered / comp_accepted,  간접입찰 비중 = indirect_bidder_accepted / comp_accepted
+# 간접입찰 통계는 2008년 4월부터만 존재합니다(그 이전은 null).
+AUCTION_API = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
+AUCTION_TERMS = ["2-Year", "3-Year", "5-Year", "7-Year", "10-Year", "20-Year", "30-Year"]
+AUCTION_FIELDS = ("auction_date,security_type,security_term,reopening,offering_amt,comp_tendered,comp_accepted,"
+                  "indirect_bidder_accepted,direct_bidder_accepted,primary_dealer_accepted,high_yield")
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner="미국 국채 입찰 결과를 불러오는 중입니다...")
+def get_auction_data():
+    """Note/Bond 입찰 전체(2000~)를 받아 응찰배율·응찰자별 비중을 계산합니다. 반환: (DataFrame, error)"""
+    try:
+        rows, page = [], 1
+        while True:
+            res = requests.get(AUCTION_API, params={
+                "fields": AUCTION_FIELDS, "sort": "auction_date", "page[size]": 10000, "page[number]": page,
+                "filter": "security_type:in:(Note,Bond),auction_date:gte:2000-01-01"}, timeout=30)
+            res.raise_for_status()
+            data = res.json()["data"]
+            rows += data
+            if len(data) < 10000:
+                break
+            page += 1
+    except Exception as e:
+        return pd.DataFrame(), f"재무부 입찰 데이터를 받지 못했습니다: {e}"
+
+    df = pd.DataFrame(rows).replace("null", pd.NA)
+    df["auction_date"] = pd.to_datetime(df["auction_date"])
+    for c in ["offering_amt", "comp_tendered", "comp_accepted", "indirect_bidder_accepted",
+              "direct_bidder_accepted", "primary_dealer_accepted", "high_yield"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df[df["security_term"].isin(AUCTION_TERMS) & (df["comp_accepted"] > 0) & df["comp_tendered"].notna()].copy()
+    df["btc"] = df["comp_tendered"] / df["comp_accepted"]
+    for k, c in [("indirect", "indirect_bidder_accepted"), ("direct", "direct_bidder_accepted"),
+                 ("dealer", "primary_dealer_accepted")]:
+        df[k] = df[c] / df["comp_accepted"] * 100
+    return df.sort_values("auction_date").reset_index(drop=True), None
+
+
+def auction_percentile(hist, value):
+    """hist 중 value보다 낮은 값의 비율(%). 표본이 없으면 None."""
+    hist = hist.dropna()
+    return float((hist < value).sum() / len(hist) * 100) if len(hist) else None
+
+
+def auction_verdict(p):
+    return "-" if p is None else "저조" if p < 20 else "강함" if p > 80 else "보통"
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
-    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률"
+    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률",
+    "🏛️ Page 12: 미국 국채 입찰"
 ])
 
 # ==========================================
@@ -2716,3 +2772,114 @@ with tab11:
                      .map(lambda v: "" if pd.isna(v) else f"color: {UP_C if v >= 0 else DOWN_C}; font-weight: 600"),
                 use_container_width=True,
             )
+
+
+# ==========================================
+# [Page 12] 미국 국채 입찰 결과 (응찰배율 · 간접입찰 비중)
+# ==========================================
+with tab12:
+    st.subheader("미국 국채 입찰 결과 — 수요 강도")
+    st.caption(
+        "재무부 공식 데이터(Note·Bond, 경쟁입찰 기준 = Treasury 발표 수치와 동일). "
+        "응찰배율 = 사겠다는 주문 ÷ 낙찰액, 간접입찰 비중 = 간접입찰 낙찰액 ÷ 낙찰액. "
+        "백분위는 같은 만기 과거 입찰 중 이번 값보다 낮았던 비율이며, 20% 미만 저조 · 80% 초과 강함으로 판정합니다."
+    )
+    auc, auc_err = get_auction_data()
+    if auc_err or auc.empty:
+        st.error(auc_err or "입찰 데이터가 없습니다.")
+    else:
+        with st.expander("지표 읽는 법"):
+            st.markdown(
+                "- **응찰배율**: 높을수록 수요가 강합니다. 만기마다 평소 수준이 달라 **같은 만기끼리** 비교해야 합니다.\n"
+                "- **간접입찰**: 뉴욕연준을 통한 외국 중앙은행·해외 투자자·자산운용사 등. 높으면 딜러 밖 실수요가 많다는 뜻입니다"
+                "(‘간접 = 외국인’은 아닙니다). 통계는 2008년 4월부터만 있습니다.\n"
+                "- **딜러 비중**: 높을수록 실수요가 부족해 프라이머리딜러가 남은 물량을 받았다는 뜻입니다.\n"
+                "- 백분위 기준: **3년** = 최근 3년 같은 만기 입찰, **장기** = 응찰배율은 2000년~, 간접입찰은 2008년 4월~ 전체."
+            )
+
+        # ── 만기별 최신 입찰 요약 ──
+        summary = []
+        for term in AUCTION_TERMS:
+            d = auc[auc["security_term"] == term]
+            if d.empty:
+                continue
+            last = d.iloc[-1]
+            hist = d.iloc[:-1]
+            h3 = hist[hist["auction_date"] >= last["auction_date"] - pd.DateOffset(years=3)]
+            row = {"만기": term, "입찰일": last["auction_date"].strftime("%Y-%m-%d"),
+                   "발행액($B)": last["offering_amt"] / 1e9 if pd.notna(last["offering_amt"]) else None,
+                   "낙찰금리(%)": last["high_yield"]}
+            for key, label in [("btc", "응찰배율"), ("indirect", "간접입찰(%)")]:
+                v = last[key]
+                row[label] = v
+                if pd.isna(v):
+                    row[label + " 3년"], row[label + " 장기"], row[label + " 판정"] = None, None, "-"
+                    continue
+                p3, pl = auction_percentile(h3[key], v), auction_percentile(hist[key], v)
+                v3, vl = auction_verdict(p3), auction_verdict(pl)
+                row[label + " 3년"], row[label + " 장기"] = p3, pl
+                row[label + " 판정"] = v3 if v3 == vl else f"{v3} (장기 {vl})"
+            row["딜러(%)"] = last["dealer"]
+            summary.append(row)
+        sdf = pd.DataFrame(summary)
+
+        AUC_WEAK_C, AUC_STRONG_C = "#1c7ed6", "#e03131"
+
+        def _verdict_style(v):
+            if not isinstance(v, str):
+                return ""
+            if v.startswith("저조"):
+                return f"color: {AUC_WEAK_C}; font-weight: 700"
+            if v.startswith("강함"):
+                return f"color: {AUC_STRONG_C}; font-weight: 700"
+            return ""
+
+        st.markdown("**만기별 최신 입찰**")
+        st.dataframe(
+            sdf.style.format({"발행액($B)": "{:.0f}", "낙찰금리(%)": "{:.3f}", "응찰배율": "{:.2f}",
+                              "응찰배율 3년": "{:.0f}", "응찰배율 장기": "{:.0f}",
+                              "간접입찰(%)": "{:.1f}", "간접입찰(%) 3년": "{:.0f}", "간접입찰(%) 장기": "{:.0f}",
+                              "딜러(%)": "{:.1f}"}, na_rep="-")
+                 .map(_verdict_style, subset=["응찰배율 판정", "간접입찰(%) 판정"]),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption("판정 색: 파랑 = 저조, 빨강 = 강함. '3년'·'장기' 열은 백분위(0~100)이며, 두 기준의 판정이 다르면 괄호로 장기 판정을 병기합니다.")
+
+        st.divider()
+
+        # ── 만기별 장기 추이 ──
+        c_term, c_per = st.columns([2, 3])
+        term_sel = c_term.radio("만기", AUCTION_TERMS, index=AUCTION_TERMS.index("10-Year"),
+                                horizontal=True, key="auc_term")
+        per_sel = c_per.radio("기간", ["전체", "20년", "10년", "5년", "3년", "1년"], index=0,
+                              horizontal=True, key="auc_period")
+        d = auc[auc["security_term"] == term_sel]
+        if per_sel != "전체":
+            d = d[d["auction_date"] >= d["auction_date"].max() - pd.DateOffset(years=int(per_sel[:-1]))]
+
+        fig_a = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                              subplot_titles=("응찰배율 (배)", "간접입찰 비중 (%)"))
+        for r, (key, color) in enumerate([("btc", "#1f77b4"), ("indirect", "#2ca02c")], start=1):
+            dd = d.dropna(subset=[key])
+            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key], mode="markers", name="개별 입찰",
+                                       marker=dict(size=5, color=color, opacity=0.45), showlegend=False,
+                                       hovertemplate="%{x|%Y-%m-%d}: %{y:.2f}<extra></extra>"), row=r, col=1)
+            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key].rolling(8, min_periods=1).mean(),
+                                       mode="lines", line=dict(color="#e8590c", width=2), name="8회 이동평균",
+                                       showlegend=(r == 1), hoverinfo="skip"), row=r, col=1)
+        fig_a.update_layout(height=560, margin=dict(l=20, r=20, t=40, b=20),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1))
+        st.plotly_chart(fig_a, use_container_width=True, config={"scrollZoom": False})
+        st.caption("점 = 개별 입찰, 주황선 = 최근 8회 이동평균. 간접입찰은 2008년 4월 이전 데이터가 없어 그 이전 구간은 비어 있습니다.")
+
+        with st.expander(f"{term_sel} 최근 입찰 20건 보기"):
+            recent = auc[auc["security_term"] == term_sel].tail(20).iloc[::-1]
+            show = pd.DataFrame({
+                "입찰일": recent["auction_date"].dt.strftime("%Y-%m-%d"),
+                "재발행": recent["reopening"].map({"Yes": "Y", "No": ""}).fillna(""),
+                "발행액($B)": recent["offering_amt"] / 1e9, "낙찰금리(%)": recent["high_yield"],
+                "응찰배율": recent["btc"], "간접(%)": recent["indirect"],
+                "직접(%)": recent["direct"], "딜러(%)": recent["dealer"]})
+            st.dataframe(show.style.format({"발행액($B)": "{:.0f}", "낙찰금리(%)": "{:.3f}", "응찰배율": "{:.2f}",
+                                            "간접(%)": "{:.1f}", "직접(%)": "{:.1f}", "딜러(%)": "{:.1f}"}, na_rep="-"),
+                         use_container_width=True, hide_index=True)
