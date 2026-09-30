@@ -593,12 +593,18 @@ def get_samsung_disparity_data(start_date_str):
 # ===========================================================================
 
 def _ecos_get(url: str) -> dict:
-    """ECOS API 공통 호출 + 에러 응답(RESULT.CODE) 처리"""
+    """ECOS API 공통 호출 + 에러 응답(RESULT.CODE) 처리. 호출부에서 실패 사유를
+    바로 화면에 보여줄 수 있도록 항상 구체적인 _error 문자열을 남긴다."""
     try:
         res = requests.get(url, timeout=15)
+    except Exception as e:
+        return {"_error": f"요청 실패: {type(e).__name__}: {e}"}
+    if res.status_code != 200:
+        return {"_error": f"HTTP {res.status_code}: {res.text[:200]}"}
+    try:
         data = res.json()
     except Exception as e:
-        return {"_error": f"요청 실패: {e}"}
+        return {"_error": f"응답 파싱 실패: {type(e).__name__}: {e} (본문: {res.text[:200]})"}
     if "RESULT" in data:
         # 인증키 오류(ERROR-1xx), 데이터 없음(INFO-200) 등
         msg = data["RESULT"].get("MESSAGE", "알 수 없는 오류")
@@ -608,62 +614,68 @@ def _ecos_get(url: str) -> dict:
 
 
 @st.cache_data(ttl=3600)
-def get_ecos_key_statistics() -> pd.DataFrame:
+def get_ecos_key_statistics() -> tuple[pd.DataFrame, str]:
     """
     100대 통계지표(KeyStatisticList) — 금리·환율·물가·경기·고용·국제수지 등
     '주요 카테고리 전체'를 통계표코드 하나하나 몰라도 한 번에 받아오는 API.
     한국은행이 분류해 둔 그룹(CLASS_NAME) 그대로 반환하므로, butler.works 대시보드의
-    "그룹별 보기"와 거의 동일한 구조로 바로 붙일 수 있음.
+    "그룹별 보기"와 거의 동일한 구조로 바로 붙일 수 있음. 반환: (DataFrame, 오류 메시지)
     """
     if not ECOS_API_KEY:
-        return pd.DataFrame()
+        return pd.DataFrame(), "ECOS_API_KEY가 비어 있습니다."
     url = f"{ECOS_BASE}/KeyStatisticList/{ECOS_API_KEY}/json/kr/1/100"
     data = _ecos_get(url)
-    if "_error" in data or "KeyStatisticList" not in data:
-        return pd.DataFrame()
+    if "_error" in data:
+        return pd.DataFrame(), data["_error"]
+    if "KeyStatisticList" not in data:
+        return pd.DataFrame(), f"예상치 못한 응답 형식: {str(data)[:200]}"
     rows = data["KeyStatisticList"]["row"]
     df = pd.DataFrame(rows).rename(columns={
         "CLASS_NAME": "그룹", "KEYSTAT_NAME": "지표명",
         "DATA_VALUE": "값", "CYCLE": "시점", "UNIT_NAME": "단위",
     })
     df["값"] = pd.to_numeric(df["값"], errors="coerce")
-    return df
+    return df, ""
 
 
 @st.cache_data(ttl=86400)
-def search_ecos_stat_table(keyword: str) -> pd.DataFrame:
+def search_ecos_stat_table(keyword: str) -> tuple[pd.DataFrame, str]:
     """
     통계표코드 검색(StatisticTableList) — 전체 통계표 목록(약 1,000여 개)을 받아
     이름에 keyword가 들어간 것만 걸러줌. 100대 지표에 없는 세부 지표(예: 선행지수
     순환변동치의 원계열, 특정 만기 국고채 등)를 찾을 때 사용.
     SRCH_YN == 'Y' 인 것만 남기는데, 이게 실제로 StatisticSearch로 시계열을
-    조회할 수 있는 '말단' 통계표라는 뜻.
+    조회할 수 있는 '말단' 통계표라는 뜻. 반환: (DataFrame, 오류 메시지)
     """
     if not ECOS_API_KEY or not keyword:
-        return pd.DataFrame()
+        return pd.DataFrame(), "ECOS_API_KEY가 비어 있습니다." if not ECOS_API_KEY else ""
     url = f"{ECOS_BASE}/StatisticTableList/{ECOS_API_KEY}/json/kr/1/3000"
     data = _ecos_get(url)
-    if "_error" in data or "StatisticTableList" not in data:
-        return pd.DataFrame()
+    if "_error" in data:
+        return pd.DataFrame(), data["_error"]
+    if "StatisticTableList" not in data:
+        return pd.DataFrame(), f"예상치 못한 응답 형식: {str(data)[:200]}"
     df = pd.DataFrame(data["StatisticTableList"]["row"])
     if df.empty or "STAT_NAME" not in df.columns:
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
     df = df[df["STAT_NAME"].str.contains(keyword, na=False, regex=False)]
     if "SRCH_YN" in df.columns:
         df = df[df["SRCH_YN"] == "Y"]
-    return df[["STAT_CODE", "STAT_NAME", "CYCLE", "ORG_NAME"]].reset_index(drop=True)
+    return df[["STAT_CODE", "STAT_NAME", "CYCLE", "ORG_NAME"]].reset_index(drop=True), ""
 
 
 @st.cache_data(ttl=86400)
-def get_ecos_item_list(stat_code: str) -> pd.DataFrame:
-    """통계 세부항목 목록(StatisticItemList) — 특정 통계표코드 안의 세부 항목들"""
+def get_ecos_item_list(stat_code: str) -> tuple[pd.DataFrame, str]:
+    """통계 세부항목 목록(StatisticItemList) — 특정 통계표코드 안의 세부 항목들. 반환: (DataFrame, 오류 메시지)"""
     if not ECOS_API_KEY or not stat_code:
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
     url = f"{ECOS_BASE}/StatisticItemList/{ECOS_API_KEY}/json/kr/1/1000/{stat_code}"
     data = _ecos_get(url)
-    if "_error" in data or "StatisticItemList" not in data:
-        return pd.DataFrame()
-    return pd.DataFrame(data["StatisticItemList"]["row"])
+    if "_error" in data:
+        return pd.DataFrame(), data["_error"]
+    if "StatisticItemList" not in data:
+        return pd.DataFrame(), f"예상치 못한 응답 형식: {str(data)[:200]}"
+    return pd.DataFrame(data["StatisticItemList"]["row"]), ""
 
 
 def _fmt_ecos_date(d: datetime.date, cycle: str) -> str:
@@ -681,13 +693,14 @@ def _fmt_ecos_date(d: datetime.date, cycle: str) -> str:
 
 @st.cache_data(ttl=3600)
 def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
-                     item_code1: str = "", item_code2: str = "") -> pd.DataFrame:
+                     item_code1: str = "", item_code2: str = "") -> tuple[pd.DataFrame, str]:
     """
     통계 조회(StatisticSearch) — 실제 시계열 데이터.
     start/end는 이미 주기에 맞게 포맷된 문자열(예: "20200101", "202501", "2025Q1")이어야 함.
+    반환: (DataFrame, 오류 메시지)
     """
     if not ECOS_API_KEY or not stat_code:
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
     parts = [ECOS_BASE, "StatisticSearch", ECOS_API_KEY, "json", "kr",
               "1", "100000", stat_code, cycle, start, end]
     if item_code1:
@@ -696,13 +709,15 @@ def get_ecos_series(stat_code: str, cycle: str, start: str, end: str,
         parts.append(item_code2)
     url = "/".join(parts)
     data = _ecos_get(url)
-    if "_error" in data or "StatisticSearch" not in data:
-        return pd.DataFrame()
+    if "_error" in data:
+        return pd.DataFrame(), data["_error"]
+    if "StatisticSearch" not in data:
+        return pd.DataFrame(), f"예상치 못한 응답 형식: {str(data)[:200]}"
     df = pd.DataFrame(data["StatisticSearch"]["row"])
     if df.empty:
-        return df
+        return df, ""
     df["DATA_VALUE"] = pd.to_numeric(df["DATA_VALUE"], errors="coerce")
-    return df
+    return df, ""
 
 
 # ---------------------------------------------------------------------------
@@ -2267,9 +2282,13 @@ with tab8:
         # 100대 통계지표 요약 — butler.works의 "지금 주목" + "그룹별 보기"에 대응
         # -----------------------------------------------------------------
         with sub_summary:
-            df_key = get_ecos_key_statistics()
+            df_key, key_err = get_ecos_key_statistics()
             if df_key.empty:
-                st.warning("데이터를 불러오지 못했습니다. API 키 또는 네트워크 상태를 확인해주세요.")
+                st.warning(f"데이터를 불러오지 못했습니다 — {key_err or '알 수 없는 오류'}")
+                if key_err.startswith("[") or "인증" in key_err:
+                    st.caption("[]로 시작하는 오류는 ECOS가 보낸 응답입니다. 인증키 오류라면 발급받은 키가 "
+                               "Streamlit Cloud의 Settings → Secrets에 정확히 등록돼 있는지, 활용신청이 "
+                               "승인됐는지 확인해주세요.")
             else:
                 st.caption(f"한국은행 ECOS '100대 통계지표' 기준 · 총 {len(df_key)}개 항목")
 
@@ -2352,9 +2371,12 @@ with tab8:
             keyword = st.text_input("통계표 이름 검색 (예: 국고채, 소비자심리, 선행지수, 가계신용)", "")
 
             if keyword:
-                df_tables = search_ecos_stat_table(keyword)
+                df_tables, search_err = search_ecos_stat_table(keyword)
                 if df_tables.empty:
-                    st.info("검색 결과가 없습니다. 다른 키워드로 시도해보세요.")
+                    if search_err:
+                        st.warning(f"통계표 목록을 불러오지 못했습니다 — {search_err}")
+                    else:
+                        st.info("검색 결과가 없습니다. 다른 키워드로 시도해보세요.")
                 else:
                     table_label = df_tables.apply(
                         lambda r: f"[{r['STAT_CODE']}] {r['STAT_NAME']} ({r['CYCLE']}, {r['ORG_NAME']})", axis=1
@@ -2365,7 +2387,9 @@ with tab8:
                     )
                     stat_code = df_tables.iloc[sel_idx]["STAT_CODE"]
 
-                    df_items = get_ecos_item_list(stat_code)
+                    df_items, item_err = get_ecos_item_list(stat_code)
+                    if item_err:
+                        st.warning(f"세부 항목을 불러오지 못했습니다 — {item_err}")
                     item_code1 = ""
                     cycle = df_tables.iloc[sel_idx]["CYCLE"]
                     if not df_items.empty and "ITEM_CODE" in df_items.columns:
@@ -2388,10 +2412,13 @@ with tab8:
                     if st.button("조회하기", type="primary"):
                         start_str = _fmt_ecos_date(start_date, cycle)
                         end_str = _fmt_ecos_date(end_date, cycle)
-                        df_series = get_ecos_series(stat_code, cycle, start_str, end_str, item_code1)
+                        df_series, series_err = get_ecos_series(stat_code, cycle, start_str, end_str, item_code1)
 
                         if df_series.empty:
-                            st.warning("조회된 데이터가 없습니다. 기간이나 항목을 다시 확인해주세요.")
+                            if series_err:
+                                st.warning(f"조회 실패 — {series_err}")
+                            else:
+                                st.warning("조회된 데이터가 없습니다. 기간이나 항목을 다시 확인해주세요.")
                         else:
                             latest = df_series.iloc[-1]
                             unit_val = df_series["UNIT_NAME"].iloc[0] if "UNIT_NAME" in df_series.columns else ""
