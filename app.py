@@ -408,7 +408,7 @@ def get_kospi_monthly_data():
 
 @st.cache_data(ttl=3600)
 def get_us_bonds_data():
-    bond_tickers = {"5년물": "^FVX", "10년물": "^TNX", "30년물": "^TYX"}
+    bond_tickers = {"10년물": "^TNX", "30년물": "^TYX"}
     start_long = "2000-01-01"
     data = {}
     for name, ticker in bond_tickers.items():
@@ -427,7 +427,7 @@ def get_us_bonds_data():
             data["2년물"] = s2
 
     # 만기 짧은 순으로 정렬(2·5·10·30년)
-    order = ["2년물", "5년물", "10년물", "30년물"]
+    order = ["2년물", "10년물", "30년물"]
     data = {k: data[k] for k in order if k in data}
     return data
 
@@ -1757,7 +1757,7 @@ with tab3:
 with tab4:
     st.subheader("미국 국채 만기별 장기 추이 (2000년 ~ 현재)")
     bonds_data = get_us_bonds_data()
-    BOND_COLORS = {"2년물": "#9467bd", "5년물": "#1f77b4", "10년물": "#ff7f0e", "30년물": "#2ca02c"}
+    BOND_COLORS = {"2년물": "#9467bd", "10년물": "#ff7f0e", "30년물": "#2ca02c"}
 
     BOND_PERIODS = {"전체": None, "20년": pd.DateOffset(years=20), "10년": pd.DateOffset(years=10),
                     "5년": pd.DateOffset(years=5), "3년": pd.DateOffset(years=3),
