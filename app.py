@@ -1512,13 +1512,13 @@ def auction_verdict(p):
 
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
     "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률",
-    "🏛️ Page 12: 미국 국채 입찰"
+    "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자"
 ])
 
 # ==========================================
@@ -3056,3 +3056,31 @@ with tab12:
             st.dataframe(show.style.format({"발행액($B)": "{:.0f}", "낙찰금리(%)": "{:.3f}", "응찰배율": "{:.2f}",
                                             "간접(%)": "{:.1f}", "직접(%)": "{:.1f}", "딜러(%)": "{:.1f}"}, na_rep="-"),
                          use_container_width=True, hide_index=True)
+
+
+# ==========================================
+# [Page 13] 외국인 증권투자 동향 (금융감독원 월별 보도자료)
+# 데이터: fss_foreign/parsed.json (월 1회 자동 갱신), 차트: fss_foreign/build.py
+# ==========================================
+with tab13:
+    import importlib.util
+    _fdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fss_foreign")
+
+    @st.cache_data(ttl=3600)
+    def get_fss_foreign_figs(mtime):
+        spec = importlib.util.spec_from_file_location("fss_build", os.path.join(_fdir, "build.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        figs, (idx, *_rest, miss) = mod.figs()
+        return figs, idx[-1], miss
+
+    figs_f, last_f, miss_f = get_fss_foreign_figs(os.path.getmtime(os.path.join(_fdir, "parsed.json")))
+    st.subheader("외국인 증권투자 동향")
+    st.caption(f"출처: 금융감독원 월별 「외국인 증권투자 동향」 보도자료(결제기준) · 최신 {last_f}"
+               + (f" · 원자료 미확보 월(공란): {', '.join(miss_f)}" if miss_f else ""))
+    st.markdown("**붙임1 · 주식**")
+    st.plotly_chart(figs_f[0], use_container_width=True, config={"scrollZoom": False})
+    st.plotly_chart(figs_f[1], use_container_width=True, config={"scrollZoom": False})
+    st.markdown("**붙임2 · 채권**")
+    st.plotly_chart(figs_f[2], use_container_width=True, config={"scrollZoom": False})
+    st.plotly_chart(figs_f[3], use_container_width=True, config={"scrollZoom": False})
