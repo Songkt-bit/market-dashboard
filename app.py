@@ -3093,6 +3093,7 @@ with tab13:
 PC_MARKETS = {
     "S&P 500": {"index": "SPX", "etf": "SPY", "px": "^GSPC", "px_name": "S&P 500"},
     "나스닥(100)": {"index": "NDX", "etf": "QQQ", "px": "^NDX", "px_name": "나스닥 100"},
+    "KOSPI200": {"index": "KOSPI200", "etf": None, "px": "^KS200", "px_name": "KOSPI 200"},
 }
 PC_PERIODS = {"1개월": 31, "3개월": 92, "6개월": 183, "1년": 366, "전체(2년)": 10_000}
 _PC_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "putcall", "data.csv")
@@ -3113,79 +3114,82 @@ with tab14:
         pc_all = get_putcall_data(os.path.getmtime(_PC_CSV))
         c1, c2, c3 = st.columns([1, 1, 2])
         mk = c1.radio("시장", list(PC_MARKETS), horizontal=True, key="pc_mk")
-        kind = c2.radio("옵션 종류", ["지수옵션", "ETF옵션"], horizontal=True, key="pc_kind")
-        per = c3.radio("기간", list(PC_PERIODS), index=3, horizontal=True, key="pc_per")
         cfg = PC_MARKETS[mk]
+        kind = c2.radio("옵션 종류", ["지수옵션", "ETF옵션"], horizontal=True, key="pc_kind") if cfg["etf"] else "지수옵션"
+        per = c3.radio("기간", list(PC_PERIODS), index=3, horizontal=True, key="pc_per")
         sym = cfg["index"] if kind == "지수옵션" else cfg["etf"]
         d = pc_all[pc_all["symbol"] == sym].sort_values("date").set_index("date")
-        d["ma5"] = d["pc"].rolling(5).mean()
-        d["ma20"] = d["pc"].rolling(20).mean()
-        view = d[d.index >= d.index.max() - pd.Timedelta(days=PC_PERIODS[per])]
-        show_px = st.checkbox(f"{cfg['px_name']} 지수 겹쳐보기 (우측 축)", value=True, key="pc_px")
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        if show_px:
-            px_s = get_single_index_close(cfg["px"], (view.index.min() - pd.Timedelta(days=5)).strftime("%Y-%m-%d"))
-            px_s = px_s[(px_s.index >= view.index.min()) & (px_s.index <= view.index.max())]
-            fig.add_trace(go.Scatter(x=px_s.index, y=px_s.values, name=cfg["px_name"], line=dict(color="#b0b7c3", width=1.5),
-                                     hovertemplate="%{y:,.0f}<extra>" + cfg["px_name"] + "</extra>"), secondary_y=True)
-        mean_all, std_all = d["pc"].mean(), d["pc"].std()
-        fig.add_hrect(y0=mean_all - std_all, y1=mean_all + std_all, fillcolor="#2a9d8f", opacity=0.07, line_width=0)
-        fig.add_hline(y=mean_all, line=dict(color="#2a9d8f", width=1, dash="dot"),
-                      annotation_text=f"2년 평균 {mean_all:.2f}", annotation_position="top left")
-        fig.add_trace(go.Scatter(x=view.index, y=view["pc"], name="일별", mode="lines", line=dict(color="#9ab6d8", width=1),
-                                 hovertemplate="%{y:.2f}<extra>일별</extra>"), secondary_y=False)
-        fig.add_trace(go.Scatter(x=view.index, y=view["ma5"], name="5일 평균", line=dict(color="#1f3a5f", width=2),
-                                 hovertemplate="%{y:.2f}<extra>5일 평균</extra>"), secondary_y=False)
-        fig.add_trace(go.Scatter(x=view.index, y=view["ma20"], name="20일 평균", line=dict(color="#e76f51", width=2.5),
-                                 hovertemplate="%{y:.2f}<extra>20일 평균</extra>"), secondary_y=False)
-        fig.update_yaxes(title_text="풋/콜 비율", secondary_y=False)
-        fig.update_yaxes(title_text=cfg["px_name"], secondary_y=True, showgrid=False)
-        fig.update_layout(height=520, hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20),
-                          title=f"{mk} · {sym} 옵션 풋/콜 비율 ({kind})",
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False})
-        st.caption(f"출처: OCC(옵션청산공사) 일별 거래량 · 풋/콜 = 풋 거래량 ÷ 콜 거래량 · 최신 {d.index.max():%Y-%m-%d} · "
-                   "음영 = 2년 평균 ±1표준편차")
-
-        # --- 수치 요약 + 해석 -------------------------------------------------
-        last = d.iloc[-1]
-        pct = (d["pc"] < last["pc"]).mean() * 100
-        pct20 = (d["ma20"].dropna() < last["ma20"]).mean() * 100
-        z = (last["pc"] - mean_all) / std_all
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("최근 일별", f"{last['pc']:.2f}", f"{last['pc'] - d['pc'].iloc[-2]:+.2f} (전일비)")
-        m2.metric("5일 평균", f"{last['ma5']:.2f}")
-        m3.metric("20일 평균", f"{last['ma20']:.2f}")
-        m4.metric("2년 내 백분위(일별)", f"{pct:.0f}%", help="100%에 가까울수록 최근 2년 중 풋이 가장 쏠린 날")
-        m5.metric("z-점수", f"{z:+.1f}σ", help="2년 평균 대비 표준편차 몇 배 떨어져 있는지")
-
-        if pct20 >= 80:
-            tone = "🔴 풋 쏠림(헤지·경계 심리 강함)"
-            msg = ("최근 20일 평균이 2년 분포 상위권입니다. 하락 대비 수요가 많다는 뜻이라 시장이 불안한 국면에서 나타납니다. "
-                   "다만 극단적일수록 비관이 과도해 반등으로 이어지는 '역발상' 해석도 있어, 방향 판단보다는 심리 온도계로 쓰시길 권합니다.")
-        elif pct20 <= 20:
-            tone = "🟢 콜 우위(낙관·추종 매수 강함)"
-            msg = "최근 20일 평균이 2년 분포 하위권입니다. 상승 베팅이 많은 낙관 국면이며, 지나치게 낮아지면 과열 신호로 읽기도 합니다."
+        if d.empty:
+            st.info(f"{mk} 풋콜 데이터가 아직 없습니다. KRX 로그인이 필요한 데이터라 `python putcall/fetch_kospi.py` 를 한 번 실행해 주세요.")
         else:
-            tone = "⚪ 중립 구간"
-            msg = "최근 20일 평균이 2년 분포 중간대에 있어 뚜렷한 쏠림이 없습니다."
-        st.info(f"**현재 해석 — {tone}**\n\n{msg}\n\n"
-                f"• 최근 일별 {last['pc']:.2f}는 2년 평균 {mean_all:.2f} 대비 {z:+.1f}σ, 20일 평균은 2년 분포의 {pct20:.0f}% 지점입니다.")
+            d["ma5"] = d["pc"].rolling(5).mean()
+            d["ma20"] = d["pc"].rolling(20).mean()
+            view = d[d.index >= d.index.max() - pd.Timedelta(days=PC_PERIODS[per])]
+            show_px = st.checkbox(f"{cfg['px_name']} 지수 겹쳐보기 (우측 축)", value=True, key="pc_px")
 
-        with st.expander("📖 풋콜 레이티오, 이렇게 읽으세요"):
-            st.markdown("""
-- **정의**: 하루 동안 거래된 풋옵션 수 ÷ 콜옵션 수. **1보다 크면 풋(하락 베팅·헤지)이, 작으면 콜(상승 베팅)이 더 많이 거래**됐다는 뜻입니다.
-- **절대 수준보다 '평소 대비'가 중요합니다.** 지수옵션(SPX·NDX)은 기관이 포트폴리오 헤지로 풋을 상시 사기 때문에 평소에도 1 안팎 이상이 정상이고, 개별종목 위주의 주식옵션은 0.6~0.8 수준입니다. 그래서 위 해석은 **이 지수의 최근 2년 분포**와 비교해 만듭니다.
-- **지수옵션 vs ETF옵션**: 지수옵션은 기관 헤지 성격이, ETF옵션(SPY·QQQ)은 개인·단기 매매 성격이 상대적으로 강합니다. 두 값이 엇갈리면 '기관은 방어, 개인은 공격' 같은 온도차로 해석할 수 있습니다.
-- **일별 vs 이동평균**: 일별 값은 만기일·이벤트 헤지 거래로 튀는 날이 많아 5일·20일 평균 추세를 함께 보세요.
-- **한계**: 거래량 기준 심리지표라 **단독 매매 신호로는 약합니다.** 지수 급락 직후 풋 쏠림, 상승장 말기 콜 쏠림처럼 '극단값 이후 되돌림' 경향이 참고 정도로만 관찰됩니다.
-- **데이터 범위**: OCC가 최근 2년치만 제공해 그 이전 이력은 없으며, 이 앱이 매 영업일 누적 저장합니다. 거래량은 모든 거래소·계좌유형(고객/회사/시장조성자) 합산입니다.
-            """)
-        with st.expander(f"{sym} 최근 20거래일 데이터"):
-            t = d.tail(20).iloc[::-1]
-            st.dataframe(pd.DataFrame({"일자": t.index.strftime("%Y-%m-%d"), "풋 거래량": t["put"], "콜 거래량": t["call"],
-                                       "풋/콜": t["pc"], "5일 평균": t["ma5"], "20일 평균": t["ma20"]})
-                         .style.format({"풋 거래량": "{:,.0f}", "콜 거래량": "{:,.0f}", "풋/콜": "{:.2f}",
-                                        "5일 평균": "{:.2f}", "20일 평균": "{:.2f}"}, na_rep="-"),
-                         use_container_width=True, hide_index=True)
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            if show_px:
+                px_s = get_single_index_close(cfg["px"], (view.index.min() - pd.Timedelta(days=5)).strftime("%Y-%m-%d"))
+                px_s = px_s[(px_s.index >= view.index.min()) & (px_s.index <= view.index.max())]
+                fig.add_trace(go.Scatter(x=px_s.index, y=px_s.values, name=cfg["px_name"], line=dict(color="#b0b7c3", width=1.5),
+                                         hovertemplate="%{y:,.0f}<extra>" + cfg["px_name"] + "</extra>"), secondary_y=True)
+            mean_all, std_all = d["pc"].mean(), d["pc"].std()
+            fig.add_hrect(y0=mean_all - std_all, y1=mean_all + std_all, fillcolor="#2a9d8f", opacity=0.07, line_width=0)
+            fig.add_hline(y=mean_all, line=dict(color="#2a9d8f", width=1, dash="dot"),
+                          annotation_text=f"2년 평균 {mean_all:.2f}", annotation_position="top left")
+            fig.add_trace(go.Scatter(x=view.index, y=view["pc"], name="일별", mode="lines", line=dict(color="#9ab6d8", width=1),
+                                     hovertemplate="%{y:.2f}<extra>일별</extra>"), secondary_y=False)
+            fig.add_trace(go.Scatter(x=view.index, y=view["ma5"], name="5일 평균", line=dict(color="#1f3a5f", width=2),
+                                     hovertemplate="%{y:.2f}<extra>5일 평균</extra>"), secondary_y=False)
+            fig.add_trace(go.Scatter(x=view.index, y=view["ma20"], name="20일 평균", line=dict(color="#e76f51", width=2.5),
+                                     hovertemplate="%{y:.2f}<extra>20일 평균</extra>"), secondary_y=False)
+            fig.update_yaxes(title_text="풋/콜 비율", secondary_y=False)
+            fig.update_yaxes(title_text=cfg["px_name"], secondary_y=True, showgrid=False)
+            fig.update_layout(height=520, hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20),
+                              title=f"{mk} · {sym} 옵션 풋/콜 비율 ({kind})",
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False})
+            st.caption(f"출처: OCC(옵션청산공사)·KRX 일별 거래량 · 풋/콜 = 풋 거래량 ÷ 콜 거래량 · 최신 {d.index.max():%Y-%m-%d} · "
+                       "음영 = 2년 평균 ±1표준편차")
+
+            # --- 수치 요약 + 해석 -------------------------------------------------
+            last = d.iloc[-1]
+            pct = (d["pc"] < last["pc"]).mean() * 100
+            pct20 = (d["ma20"].dropna() < last["ma20"]).mean() * 100
+            z = (last["pc"] - mean_all) / std_all
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("최근 일별", f"{last['pc']:.2f}", f"{last['pc'] - d['pc'].iloc[-2]:+.2f} (전일비)")
+            m2.metric("5일 평균", f"{last['ma5']:.2f}")
+            m3.metric("20일 평균", f"{last['ma20']:.2f}")
+            m4.metric("2년 내 백분위(일별)", f"{pct:.0f}%", help="100%에 가까울수록 최근 2년 중 풋이 가장 쏠린 날")
+            m5.metric("z-점수", f"{z:+.1f}σ", help="2년 평균 대비 표준편차 몇 배 떨어져 있는지")
+
+            if pct20 >= 80:
+                tone = "🔴 풋 쏠림(헤지·경계 심리 강함)"
+                msg = ("최근 20일 평균이 2년 분포 상위권입니다. 하락 대비 수요가 많다는 뜻이라 시장이 불안한 국면에서 나타납니다. "
+                       "다만 극단적일수록 비관이 과도해 반등으로 이어지는 '역발상' 해석도 있어, 방향 판단보다는 심리 온도계로 쓰시길 권합니다.")
+            elif pct20 <= 20:
+                tone = "🟢 콜 우위(낙관·추종 매수 강함)"
+                msg = "최근 20일 평균이 2년 분포 하위권입니다. 상승 베팅이 많은 낙관 국면이며, 지나치게 낮아지면 과열 신호로 읽기도 합니다."
+            else:
+                tone = "⚪ 중립 구간"
+                msg = "최근 20일 평균이 2년 분포 중간대에 있어 뚜렷한 쏠림이 없습니다."
+            st.info(f"**현재 해석 — {tone}**\n\n{msg}\n\n"
+                    f"• 최근 일별 {last['pc']:.2f}는 2년 평균 {mean_all:.2f} 대비 {z:+.1f}σ, 20일 평균은 2년 분포의 {pct20:.0f}% 지점입니다.")
+
+            with st.expander("📖 풋콜 레이티오, 이렇게 읽으세요"):
+                st.markdown("""
+    - **정의**: 하루 동안 거래된 풋옵션 수 ÷ 콜옵션 수. **1보다 크면 풋(하락 베팅·헤지)이, 작으면 콜(상승 베팅)이 더 많이 거래**됐다는 뜻입니다.
+    - **절대 수준보다 '평소 대비'가 중요합니다.** 지수옵션(SPX·NDX)은 기관이 포트폴리오 헤지로 풋을 상시 사기 때문에 평소에도 1 안팎 이상이 정상이고, 개별종목 위주의 주식옵션은 0.6~0.8 수준입니다. 그래서 위 해석은 **이 지수의 최근 2년 분포**와 비교해 만듭니다.
+    - **지수옵션 vs ETF옵션**: 지수옵션은 기관 헤지 성격이, ETF옵션(SPY·QQQ)은 개인·단기 매매 성격이 상대적으로 강합니다. 두 값이 엇갈리면 '기관은 방어, 개인은 공격' 같은 온도차로 해석할 수 있습니다.
+    - **일별 vs 이동평균**: 일별 값은 만기일·이벤트 헤지 거래로 튀는 날이 많아 5일·20일 평균 추세를 함께 보세요.
+    - **한계**: 거래량 기준 심리지표라 **단독 매매 신호로는 약합니다.** 지수 급락 직후 풋 쏠림, 상승장 말기 콜 쏠림처럼 '극단값 이후 되돌림' 경향이 참고 정도로만 관찰됩니다.
+    - **데이터 범위**: OCC가 최근 2년치만 제공해 그 이전 이력은 없으며, 이 앱이 매 영업일 누적 저장합니다. 거래량은 모든 거래소·계좌유형(고객/회사/시장조성자) 합산입니다.
+                """)
+            with st.expander(f"{sym} 최근 20거래일 데이터"):
+                t = d.tail(20).iloc[::-1]
+                st.dataframe(pd.DataFrame({"일자": t.index.strftime("%Y-%m-%d"), "풋 거래량": t["put"], "콜 거래량": t["call"],
+                                           "풋/콜": t["pc"], "5일 평균": t["ma5"], "20일 평균": t["ma20"]})
+                             .style.format({"풋 거래량": "{:,.0f}", "콜 거래량": "{:,.0f}", "풋/콜": "{:.2f}",
+                                            "5일 평균": "{:.2f}", "20일 평균": "{:.2f}"}, na_rep="-"),
+                             use_container_width=True, hide_index=True)
