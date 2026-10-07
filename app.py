@@ -3295,7 +3295,7 @@ JGB_CSV = "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/his
 
 @st.cache_data(ttl=3600)
 def get_10y_yields(years: int = 3):
-    """미(yfinance ^TNX)·일(재무성 CSV)·한(ECOS 국고채10년) 10년물 일별 금리. 반환: (DataFrame, 오류 dict)"""
+    """미(yfinance ^TNX)·일(재무성 CSV)·한(네이버 금융 국고채10년) 10년물 일별 금리. 반환: (DataFrame, 오류 dict)"""
     start = pd.Timestamp.today().normalize() - pd.DateOffset(years=years)
     cols, errs = {}, {}
     try:
@@ -3313,11 +3313,26 @@ def get_10y_yields(years: int = 3):
         cols["일본"] = j[j.index >= start]
     except Exception as e:
         errs["일본"] = str(e)
-    kr, e = get_ecos_series("817Y002", "D", start.strftime("%Y%m%d"), datetime.date.today().strftime("%Y%m%d"), "010210000")
-    if not kr.empty:
-        cols["한국"] = pd.Series(kr["DATA_VALUE"].values, index=pd.to_datetime(kr["TIME"]))
-    else:
-        errs["한국"] = e or "ECOS_API_KEY 없음"
+    # 한국 10년물: Streamlit Cloud에서는 ecos.bok.or.kr 접속이 막히는 경우가 있어 네이버 금융 API를 사용
+    try:
+        rows, page = [], 1
+        while page <= 30:
+            r = requests.get("https://m.stock.naver.com/front-api/marketIndex/prices",
+                             params={"category": "bond", "reutersCode": "KR10YT=RR", "page": page, "pageSize": 60},
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            res = r.json().get("result") or []
+            if not res:
+                break
+            rows += [(x["localTradedAt"][:10], float(x["closePrice"])) for x in res]
+            if pd.Timestamp(res[-1]["localTradedAt"][:10]) < start:
+                break
+            page += 1
+        k = pd.Series({pd.Timestamp(d): v for d, v in rows}).sort_index()
+        if k.empty:
+            raise ValueError("응답이 비어 있음")
+        cols["한국"] = k[k.index >= start]
+    except Exception as e:
+        errs["한국"] = f"{type(e).__name__}: {e}"
     return pd.DataFrame(cols).sort_index().ffill(), errs
 
 
@@ -3402,5 +3417,5 @@ with tab15:
 - **헤지비용 ≈ 대상국 정책금리 − 본국 정책금리.** 금리가 높은 통화 자산을 본국 통화로 헤지하면 금리차만큼 수익이 깎입니다(커버드 이자율 평가). 예) 美 상단·하단 평균 3.63% − 日 0.75% ≈ 2.9%p.
 - 일본 투자자가 美10Y 4.5%를 헤지하면 약 1.6%로, 헤지 없이 日10Y 3%대를 사는 쪽이 유리해질 수 있습니다(블로그 사례와 동일한 논리).
 - 실제 헤지비용은 3개월물 FX스왑포인트·**CRS 베이시스(달러 프리미엄)**, 롤오버 시점 금리 변동에 따라 달라집니다. 이 화면은 **정책금리 기반 개략치**이며 ±0.3%p 이내는 '비슷'으로 표시합니다.
-- 헤지를 하지 않으면 환율 변동 위험을 그대로 지므로 위 비교는 '헤지 시' 기준입니다. 韓 10Y는 ECOS 키가 있어야 자동 조회됩니다. 日 10Y는 일본 재무성, 美 10Y는 ^TNX(야후) 기준입니다.
+- 헤지를 하지 않으면 환율 변동 위험을 그대로 지므로 위 비교는 '헤지 시' 기준입니다. 韓 10Y는 네이버 금융(국고채 10년), 韓 기준금리는 ECOS(접속 가능할 때)에서 가져옵니다. 日 10Y는 일본 재무성, 美 10Y는 ^TNX(야후) 기준입니다.
         """)
