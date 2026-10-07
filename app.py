@@ -1512,13 +1512,14 @@ def auction_verdict(p):
 
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
     "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률",
-    "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오"
+    "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오",
+    "🛡️ Page 15: 환헤지 타당성"
 ])
 
 # ==========================================
@@ -3283,3 +3284,123 @@ with tab14:
                              .style.format({"풋 거래량": "{:,.0f}", "콜 거래량": "{:,.0f}", "풋/콜": "{:.2f}",
                                             "5일 평균": "{:.2f}", "20일 평균": "{:.2f}"}, na_rep="-"),
                              use_container_width=True, hide_index=True)
+
+
+# ==========================================
+# [Page 15] 미·일·한 국채 10년 금리 & 환헤지 타당성
+# 헤지비용 ≈ (투자대상국 단기 정책금리 − 투자자 본국 정책금리). 실제 스왑포인트·CRS 베이시스와는 차이가 있는 근사치.
+# ==========================================
+JGB_CSV = "https://www.mof.go.jp/english/policy/jgbs/reference/interest_rate/historical/jgbcme_all.csv"
+
+
+@st.cache_data(ttl=3600)
+def get_10y_yields(years: int = 3):
+    """미(yfinance ^TNX)·일(재무성 CSV)·한(ECOS 국고채10년) 10년물 일별 금리. 반환: (DataFrame, 오류 dict)"""
+    start = pd.Timestamp.today().normalize() - pd.DateOffset(years=years)
+    cols, errs = {}, {}
+    try:
+        d = yf.download("^TNX", start=start, progress=False)["Close"]
+        cols["미국"] = d.iloc[:, 0] if isinstance(d, pd.DataFrame) else d
+    except Exception as e:
+        errs["미국"] = str(e)
+    try:
+        r = requests.get(JGB_CSV, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        r.raise_for_status()
+        j = pd.read_csv(io.StringIO(r.text), skiprows=1)
+        j["Date"] = pd.to_datetime(j["Date"], errors="coerce")
+        j["10Y"] = pd.to_numeric(j["10Y"], errors="coerce")
+        j = j.dropna(subset=["Date", "10Y"]).set_index("Date")["10Y"]
+        cols["일본"] = j[j.index >= start]
+    except Exception as e:
+        errs["일본"] = str(e)
+    kr, e = get_ecos_series("817Y002", "D", start.strftime("%Y%m%d"), datetime.date.today().strftime("%Y%m%d"), "010210000")
+    if not kr.empty:
+        cols["한국"] = pd.Series(kr["DATA_VALUE"].values, index=pd.to_datetime(kr["TIME"]))
+    else:
+        errs["한국"] = e or "ECOS_API_KEY 없음"
+    return pd.DataFrame(cols).sort_index().ffill(), errs
+
+
+@st.cache_data(ttl=86400)
+def get_bok_base_rate():
+    today = datetime.date.today()
+    df, _ = get_ecos_series("722Y001", "M", (today - datetime.timedelta(days=120)).strftime("%Y%m"), today.strftime("%Y%m"), "0101000")
+    return float(df["DATA_VALUE"].dropna().iloc[-1]) if not df.empty else None
+
+
+with tab15:
+    st.subheader("🛡️ 미·일·한 기준금리 · 국채 10년 비교와 환헤지 타당성")
+    ydf, yerrs = get_10y_yields()
+    for k, v in yerrs.items():
+        st.warning(f"{k} 10년물 자동 조회 실패 — 아래 입력칸에 직접 입력하세요. ({v})")
+    last10 = {k: float(ydf[k].dropna().iloc[-1]) for k in ydf.columns} if not ydf.empty else {}
+    bok_auto = get_bok_base_rate()
+
+    st.markdown("**① 금리 입력** (10년물은 자동 조회, 기준금리는 최신 값으로 직접 확인·수정)")
+    c = st.columns(6)
+    fed_lo = c[0].number_input("美 기준금리 하단(%)", value=3.50, step=0.25, key="hg_fed_lo")
+    fed_hi = c[1].number_input("美 기준금리 상단(%)", value=3.75, step=0.25, key="hg_fed_hi")
+    boj = c[2].number_input("日 기준금리(%)", value=0.75, step=0.25, key="hg_boj")
+    bok = c[3].number_input("韓 기준금리(%)" + (" · ECOS" if bok_auto else ""), value=bok_auto if bok_auto is not None else 2.50, step=0.25, key="hg_bok")
+    y_us = c[4].number_input("美 10Y(%)", value=round(last10.get("미국", 4.5), 3), step=0.01, key="hg_y_us")
+    y_jp = c[5].number_input("日 10Y(%)", value=round(last10.get("일본", 3.0), 3), step=0.01, key="hg_y_jp")
+    y_kr = st.number_input("韓 10Y(%)", value=round(last10.get("한국", 3.5), 3), step=0.01, key="hg_y_kr")
+    pol = {"미국": (fed_lo + fed_hi) / 2, "일본": boj, "한국": bok}
+    y10 = {"미국": y_us, "일본": y_jp, "한국": y_kr}
+
+    # 투자자(본국) × 투자대상 매트릭스: 헤지수익률 = 대상국 10Y − (대상국 정책금리 − 본국 정책금리)
+    rows = []
+    for home in ["한국", "일본", "미국"]:
+        for tgt in ["미국", "일본", "한국"]:
+            if home == tgt:
+                continue
+            cost = pol[tgt] - pol[home]
+            hedged = y10[tgt] - cost
+            diff = hedged - y10[home]
+            rows.append({"투자자": f"{home} 투자자", "투자대상": f"{tgt}국채 10Y", "표면금리(%)": y10[tgt],
+                         "헤지비용(%p)": cost, "헤지 후(%)": hedged, "본국 10Y(%)": y10[home], "본국채 대비(%p)": diff,
+                         "판정": "🟢 헤지 투자 유리" if diff > 0.3 else "🔴 본국채가 유리" if diff < -0.3 else "⚪ 비슷"})
+    mdf = pd.DataFrame(rows)
+
+    st.markdown("**② 환헤지 후 수익률 비교** — 헤지 후 = 10Y − (대상국 정책금리 − 본국 정책금리)")
+    st.dataframe(mdf.style.format({"표면금리(%)": "{:.2f}", "헤지비용(%p)": "{:+.2f}", "헤지 후(%)": "{:.2f}",
+                                  "본국 10Y(%)": "{:.2f}", "본국채 대비(%p)": "{:+.2f}"}),
+                 use_container_width=True, hide_index=True)
+
+    ex = mdf[mdf["투자자"] == "한국 투자자"]
+    jp_k = ex[ex["투자대상"].str.startswith("일본")].iloc[0]
+    us_k = ex[ex["투자대상"].str.startswith("미국")].iloc[0]
+    us_j = mdf[(mdf["투자자"] == "일본 투자자") & mdf["투자대상"].str.startswith("미국")].iloc[0]
+    jp_kr = mdf[(mdf["투자자"] == "일본 투자자") & mdf["투자대상"].str.startswith("한국")].iloc[0]
+    st.info(
+        f"**일본 투자자 → 韓국채** — 韓 10Y {y_kr:.2f}% − 헤지비용 {jp_kr['헤지비용(%p)']:.2f}%p(韓 {bok:.2f}% − 日 {boj:.2f}%) = "
+        f"{jp_kr['헤지 후(%)']:.2f}% vs 日 10Y {y_jp:.2f}% ({jp_kr['본국채 대비(%p)']:+.2f}%p) → {jp_kr['판정']}. "
+        f"헤지 없이 사면(환노출) {y_kr:.2f}%를 그대로 받지만 원화가 엔화 대비 약세가 되면 환차손, 강세가 되면 이자+환차익 이중 이득입니다.\n\n"
+        f"**일본 투자자 관점** — 美 10Y {y_us:.2f}% 에서 헤지비용 {us_j['헤지비용(%p)']:.2f}%p를 빼면 {us_j['헤지 후(%)']:.2f}% 로, "
+        f"日 10Y {y_jp:.2f}% 대비 {us_j['본국채 대비(%p)']:+.2f}%p → {us_j['판정']}\n\n"
+        f"**한국 투자자 관점** — 美국채 헤지 후 {us_k['헤지 후(%)']:.2f}% ({us_k['본국채 대비(%p)']:+.2f}%p vs 韓 10Y), "
+        f"日국채 헤지 후 {jp_k['헤지 후(%)']:.2f}% ({jp_k['본국채 대비(%p)']:+.2f}%p vs 韓 10Y)")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        fig_b = go.Figure()
+        names = ["미국", "일본", "한국"]
+        fig_b.add_bar(x=names, y=[pol[n] for n in names], name="기준금리", text=[f"{pol[n]:.2f}" for n in names])
+        fig_b.add_bar(x=names, y=[y10[n] for n in names], name="국채 10Y", text=[f"{y10[n]:.2f}" for n in names])
+        apply_title_and_legend(fig_b, "기준금리 vs 국채 10년 (%)", height=380)
+        st.plotly_chart(fig_b, use_container_width=True, config={"scrollZoom": False})
+    with g2:
+        if not ydf.empty:
+            fig_l = go.Figure()
+            for n in ydf.columns:
+                fig_l.add_scatter(x=ydf.index, y=ydf[n], name=f"{n} 10Y", mode="lines")
+            apply_title_and_legend(fig_l, "국채 10년 금리 추이 (최근 3년, %)", height=380)
+            st.plotly_chart(fig_l, use_container_width=True, config={"scrollZoom": False})
+
+    with st.expander("📖 해석 및 한계"):
+        st.markdown("""
+- **헤지비용 ≈ 대상국 정책금리 − 본국 정책금리.** 금리가 높은 통화 자산을 본국 통화로 헤지하면 금리차만큼 수익이 깎입니다(커버드 이자율 평가). 예) 美 상단·하단 평균 3.63% − 日 0.75% ≈ 2.9%p.
+- 일본 투자자가 美10Y 4.5%를 헤지하면 약 1.6%로, 헤지 없이 日10Y 3%대를 사는 쪽이 유리해질 수 있습니다(블로그 사례와 동일한 논리).
+- 실제 헤지비용은 3개월물 FX스왑포인트·**CRS 베이시스(달러 프리미엄)**, 롤오버 시점 금리 변동에 따라 달라집니다. 이 화면은 **정책금리 기반 개략치**이며 ±0.3%p 이내는 '비슷'으로 표시합니다.
+- 헤지를 하지 않으면 환율 변동 위험을 그대로 지므로 위 비교는 '헤지 시' 기준입니다. 韓 10Y는 ECOS 키가 있어야 자동 조회됩니다. 日 10Y는 일본 재무성, 美 10Y는 ^TNX(야후) 기준입니다.
+        """)
