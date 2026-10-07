@@ -1,22 +1,40 @@
 name: update-putcall
 on:
   schedule:
-    - cron: "30 23 * * 1-5"   # 평일 23:30 UTC (미국 장 마감·OCC 게시 이후)
-  workflow_dispatch: {}
+    - cron: "30 23 * * 1-5"   # 평일 23:30 UTC (미국 장 마감·OCC 게시 이후, KRX 마감 이후)
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: "KOSPI200 종목명/합산 형식만 확인(putcall/probe_out.txt 로 커밋)"
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
   update:
     runs-on: ubuntu-latest
+    env:
+      KRX_ID: ${{ secrets.KRX_ID }}
+      KRX_PW: ${{ secrets.KRX_PW }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pandas requests
-      - run: python putcall/fetch.py
+      - run: pip install pandas requests "pykrx>=1.2.9" "setuptools<81"
+      - name: probe KOSPI200 (수동 실행 시)
+        if: ${{ inputs.probe }}
+        continue-on-error: true
+        run: python putcall/fetch_kospi.py --probe 2>&1 | tee putcall/probe_out.txt
+      - name: US 풋콜 (OCC)
+        if: ${{ !inputs.probe }}
+        run: python putcall/fetch.py
+      - name: KOSPI200 풋콜 (KRX, 시크릿이 있을 때만)
+        if: ${{ !inputs.probe && env.KRX_ID != '' }}
+        continue-on-error: true
+        run: python putcall/fetch_kospi.py
       - name: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add putcall/data.csv
-          git diff --cached --quiet || (git commit -m "putcall: daily update" && git push)
+          git add putcall/data.csv putcall/probe_out.txt 2>/dev/null || git add putcall/data.csv
+          git diff --cached --quiet || (git commit -m "putcall: update" && git push)
