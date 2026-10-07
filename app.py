@@ -3106,6 +3106,85 @@ def get_putcall_data(mtime):
     return df
 
 
+# KOSPI200 옵션: Page 10과 같은 방식으로 Secrets의 KRX_ID/KRX_PW(pykrx 로그인)를 써서 앱이 직접 집계합니다.
+# 앱 서버엔 영구 저장소가 없어 받은 값은 putcall/kospi_cache.csv(재배포 시 초기화)에 누적하고, 빠진 날만 이어서 받습니다.
+KOSPI_OPT_PRODS = ("KRDRVOPK2I", "KRDRVOPWKI")   # KOSPI200 옵션(월물), KOSPI200 위클리옵션
+KOSPI_PC_DAYS = 180                               # 최초 수집 범위(달력일)
+_KOSPI_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "putcall", "kospi_cache.csv")
+
+
+def _kospi_day_volume(day):
+    """하루치 KOSPI200 옵션(월물+위클리) 콜/풋 거래량 합. 반환: (콜, 풋, 진단dict)"""
+    from pykrx.website.krx.future.core import 전종목시세
+    c = p = 0
+    diag = {}
+    for prod in KOSPI_OPT_PRODS:
+        df = 전종목시세().fetch(day.strftime("%Y%m%d"), prod)
+        if df is None or df.empty:
+            continue
+        name = df["ISU_NM"].astype(str)
+        kind = name.str.extract(r"\s([CP])\s")[0]                                           # 이름의 C/P 표기
+        kind = kind.fillna(df["ISU_SRT_CD"].astype(str).str[:1].map({"2": "C", "3": "P"}))  # 보조: 단축코드 201/301
+        vol = pd.to_numeric(df["ACC_TRDVOL"].astype(str).str.replace(",", "").str.strip()
+                            .replace({"-": "0", "": "0"}), errors="coerce").fillna(0)
+        c += int(vol[kind == "C"].sum())
+        p += int(vol[kind == "P"].sum())
+        diag[prod] = {"행 수": len(df), "C/P 인식": int(kind.notna().sum()), "종목명 샘플": name.head(3).tolist()}
+    return c, p, diag
+
+
+def get_kospi_pc(pc_all):
+    """누락된 영업일만 KRX에서 받아 캐시에 누적한 뒤 (DataFrame[call,put,pc], 안내문) 반환. 세션당 1회만 수집."""
+    empty = pd.DataFrame(columns=["call", "put", "pc"])
+    if not PYKRX_AVAILABLE:
+        return empty, f"pykrx 임포트 실패: {PYKRX_IMPORT_ERROR}"
+    if not KRX_LOGIN_CONFIGURED:
+        return empty, KRX_LOGIN_HELP
+    try:
+        cache = pd.read_csv(_KOSPI_CACHE, parse_dates=["date"]) if os.path.exists(_KOSPI_CACHE) \
+            else pd.DataFrame(columns=["date", "call", "put"])
+    except Exception:
+        cache = pd.DataFrame(columns=["date", "call", "put"])
+    if not st.session_state.get("pc_kospi_done"):
+        today = pd.Timestamp(datetime.date.today())
+        have = set(pd.to_datetime(cache["date"]).dt.normalize())
+        missing = [d for d in pd.bdate_range(today - pd.Timedelta(days=KOSPI_PC_DAYS), today) if d not in have]
+        rows, got_any = [], False
+        if missing:
+            bar = st.progress(0.0, text=f"KRX에서 KOSPI200 옵션 거래량 수집 중… (0/{len(missing)}일)")
+            for i, d in enumerate(reversed(missing)):          # 최신일부터 거꾸로 — 중간에 끊겨도 최근 값부터 확보
+                try:
+                    c, p, diag = _kospi_day_volume(d)
+                    if diag:
+                        st.session_state["pc_kospi_diag"] = diag
+                except Exception as e:
+                    c = p = 0
+                    st.session_state["pc_kospi_err"] = f"{type(e).__name__}: {e}"
+                if c + p > 0:
+                    got_any = True
+                    rows.append({"date": d, "call": c, "put": p})
+                elif d < today - pd.Timedelta(days=3):          # 오래된 빈 날 = 휴장일로 기록 (아래에서 로그인 실패 시엔 저장 안 함)
+                    rows.append({"date": d, "call": 0, "put": 0})
+                bar.progress((i + 1) / len(missing), text=f"KRX에서 KOSPI200 옵션 거래량 수집 중… ({i + 1}/{len(missing)}일)")
+            bar.empty()
+            if got_any:    # 한 건도 못 받았다면 로그인 실패일 수 있으니 휴장일 기록으로 캐시를 오염시키지 않음
+                cache = pd.concat([cache, pd.DataFrame(rows)]).drop_duplicates("date", keep="last").sort_values("date")
+                try:
+                    cache.to_csv(_KOSPI_CACHE, index=False)
+                except Exception:
+                    pass
+        st.session_state["pc_kospi_done"] = True
+    use = cache[(cache["call"] > 0) & (cache["put"] > 0)].copy()
+    saved = pc_all[pc_all["symbol"] == "KOSPI200"][["date", "call", "put"]]
+    use = pd.concat([use, saved]).drop_duplicates("date", keep="last").sort_values("date")
+    if use.empty:
+        err = st.session_state.get("pc_kospi_err")
+        return empty, ("KRX에서 옵션 거래량을 받지 못했습니다. " + (f"마지막 오류: {err}" if err else
+                       "로그인 실패(KRX_ID/KRX_PW 확인) 또는 응답 형식 변경일 수 있습니다."))
+    use["pc"] = use["put"] / use["call"]
+    return use.set_index("date"), ""
+
+
 with tab14:
     st.subheader("풋콜 레이티오 (Put/Call Ratio)")
     if not os.path.exists(_PC_CSV):
@@ -3118,10 +3197,16 @@ with tab14:
         kind = c2.radio("옵션 종류", ["지수옵션", "ETF옵션"], horizontal=True, key="pc_kind") if cfg["etf"] else "지수옵션"
         per = c3.radio("기간", list(PC_PERIODS), index=3, horizontal=True, key="pc_per")
         sym = cfg["index"] if kind == "지수옵션" else cfg["etf"]
-        d = pc_all[pc_all["symbol"] == sym].sort_values("date").set_index("date")
-        if d.empty:
-            st.info(f"{mk} 풋콜 데이터가 아직 없습니다. KRX 로그인이 필요한 데이터라 `python putcall/fetch_kospi.py` 를 한 번 실행해 주세요.")
+        kospi_msg = ""
+        if sym == "KOSPI200":
+            d, kospi_msg = get_kospi_pc(pc_all)
         else:
+            d = pc_all[pc_all["symbol"] == sym].sort_values("date").set_index("date")
+        if d.empty:
+            st.info(kospi_msg or f"{mk} 풋콜 데이터가 아직 없습니다.")
+        else:
+            span_days = (d.index.max() - d.index.min()).days
+            SP = "2년" if span_days > 600 else f"{max(1, round(span_days / 30))}개월"   # 데이터 길이에 맞춘 표기
             d["ma5"] = d["pc"].rolling(5).mean()
             d["ma20"] = d["pc"].rolling(20).mean()
             view = d[d.index >= d.index.max() - pd.Timedelta(days=PC_PERIODS[per])]
@@ -3136,7 +3221,7 @@ with tab14:
             mean_all, std_all = d["pc"].mean(), d["pc"].std()
             fig.add_hrect(y0=mean_all - std_all, y1=mean_all + std_all, fillcolor="#2a9d8f", opacity=0.07, line_width=0)
             fig.add_hline(y=mean_all, line=dict(color="#2a9d8f", width=1, dash="dot"),
-                          annotation_text=f"2년 평균 {mean_all:.2f}", annotation_position="top left")
+                          annotation_text=f"{SP} 평균 {mean_all:.2f}", annotation_position="top left")
             fig.add_trace(go.Scatter(x=view.index, y=view["pc"], name="일별", mode="lines", line=dict(color="#9ab6d8", width=1),
                                      hovertemplate="%{y:.2f}<extra>일별</extra>"), secondary_y=False)
             fig.add_trace(go.Scatter(x=view.index, y=view["ma5"], name="5일 평균", line=dict(color="#1f3a5f", width=2),
@@ -3150,7 +3235,7 @@ with tab14:
                               legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False})
             st.caption(f"출처: OCC(옵션청산공사)·KRX 일별 거래량 · 풋/콜 = 풋 거래량 ÷ 콜 거래량 · 최신 {d.index.max():%Y-%m-%d} · "
-                       "음영 = 2년 평균 ±1표준편차")
+                       f"음영 = {SP} 평균 ±1표준편차")
 
             # --- 수치 요약 + 해석 -------------------------------------------------
             last = d.iloc[-1]
@@ -3161,8 +3246,8 @@ with tab14:
             m1.metric("최근 일별", f"{last['pc']:.2f}", f"{last['pc'] - d['pc'].iloc[-2]:+.2f} (전일비)")
             m2.metric("5일 평균", f"{last['ma5']:.2f}")
             m3.metric("20일 평균", f"{last['ma20']:.2f}")
-            m4.metric("2년 내 백분위(일별)", f"{pct:.0f}%", help="100%에 가까울수록 최근 2년 중 풋이 가장 쏠린 날")
-            m5.metric("z-점수", f"{z:+.1f}σ", help="2년 평균 대비 표준편차 몇 배 떨어져 있는지")
+            m4.metric(f"{SP} 내 백분위(일별)", f"{pct:.0f}%", help=f"100%에 가까울수록 최근 {SP} 중 풋이 가장 쏠린 날")
+            m5.metric("z-점수", f"{z:+.1f}σ", help=f"{SP} 평균 대비 표준편차 몇 배 떨어져 있는지")
 
             if pct20 >= 80:
                 tone = "🔴 풋 쏠림(헤지·경계 심리 강함)"
@@ -3174,18 +3259,23 @@ with tab14:
             else:
                 tone = "⚪ 중립 구간"
                 msg = "최근 20일 평균이 2년 분포 중간대에 있어 뚜렷한 쏠림이 없습니다."
+            msg = msg.replace("2년", SP)
             st.info(f"**현재 해석 — {tone}**\n\n{msg}\n\n"
-                    f"• 최근 일별 {last['pc']:.2f}는 2년 평균 {mean_all:.2f} 대비 {z:+.1f}σ, 20일 평균은 2년 분포의 {pct20:.0f}% 지점입니다.")
+                    f"• 최근 일별 {last['pc']:.2f}는 {SP} 평균 {mean_all:.2f} 대비 {z:+.1f}σ, 20일 평균은 {SP} 분포의 {pct20:.0f}% 지점입니다.")
 
             with st.expander("📖 풋콜 레이티오, 이렇게 읽으세요"):
                 st.markdown("""
     - **정의**: 하루 동안 거래된 풋옵션 수 ÷ 콜옵션 수. **1보다 크면 풋(하락 베팅·헤지)이, 작으면 콜(상승 베팅)이 더 많이 거래**됐다는 뜻입니다.
-    - **절대 수준보다 '평소 대비'가 중요합니다.** 지수옵션(SPX·NDX)은 기관이 포트폴리오 헤지로 풋을 상시 사기 때문에 평소에도 1 안팎 이상이 정상이고, 개별종목 위주의 주식옵션은 0.6~0.8 수준입니다. 그래서 위 해석은 **이 지수의 최근 2년 분포**와 비교해 만듭니다.
+    - **절대 수준보다 '평소 대비'가 중요합니다.** 지수옵션(SPX·NDX)은 기관이 포트폴리오 헤지로 풋을 상시 사기 때문에 평소에도 1 안팎 이상이 정상이고, 개별종목 위주의 주식옵션은 0.6~0.8 수준입니다. 그래서 위 해석은 **이 지수의 수집된 기간(S&P·나스닥은 2년, KOSPI200은 약 6개월) 분포**와 비교해 만듭니다.
     - **지수옵션 vs ETF옵션**: 지수옵션은 기관 헤지 성격이, ETF옵션(SPY·QQQ)은 개인·단기 매매 성격이 상대적으로 강합니다. 두 값이 엇갈리면 '기관은 방어, 개인은 공격' 같은 온도차로 해석할 수 있습니다.
     - **일별 vs 이동평균**: 일별 값은 만기일·이벤트 헤지 거래로 튀는 날이 많아 5일·20일 평균 추세를 함께 보세요.
     - **한계**: 거래량 기준 심리지표라 **단독 매매 신호로는 약합니다.** 지수 급락 직후 풋 쏠림, 상승장 말기 콜 쏠림처럼 '극단값 이후 되돌림' 경향이 참고 정도로만 관찰됩니다.
-    - **데이터 범위**: OCC가 최근 2년치만 제공해 그 이전 이력은 없으며, 이 앱이 매 영업일 누적 저장합니다. 거래량은 모든 거래소·계좌유형(고객/회사/시장조성자) 합산입니다.
+    - **데이터 범위**: S&P500·나스닥은 OCC(옵션청산공사)가 최근 2년치만 제공해 그 이전 이력이 없고, 매 영업일 누적 저장합니다. 거래량은 모든 거래소·계좌유형(고객/회사/시장조성자) 합산입니다.
+    - **KOSPI200**: KRX 전종목 시세에서 월물·위클리 옵션의 콜/풋 거래량을 앱이 직접 합산합니다(최근 약 6개월, 앱 서버에 누적). 처음 선택할 때만 몇 분 걸립니다.
                 """)
+            if sym == "KOSPI200" and st.session_state.get("pc_kospi_diag"):
+                with st.expander("🔧 KOSPI200 콜/풋 인식 진단 (종목명 형식 확인용)"):
+                    st.json(st.session_state["pc_kospi_diag"])
             with st.expander(f"{sym} 최근 20거래일 데이터"):
                 t = d.tail(20).iloc[::-1]
                 st.dataframe(pd.DataFrame({"일자": t.index.strftime("%Y-%m-%d"), "풋 거래량": t["put"], "콜 거래량": t["call"],
