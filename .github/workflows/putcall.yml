@@ -1,0 +1,22 @@
+name: update-putcall
+on:
+  schedule:
+    - cron: "30 23 * * 1-5"   # 평일 23:30 UTC (미국 장 마감·OCC 게시 이후)
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pandas requests
+      - run: python putcall/fetch.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add putcall/data.csv
+          git diff --cached --quiet || (git commit -m "putcall: daily update" && git push)
