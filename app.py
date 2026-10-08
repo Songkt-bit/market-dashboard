@@ -1513,6 +1513,11 @@ def auction_verdict(p):
     return "-" if p is None else "저조" if p < 20 else "강함" if p > 80 else "보통"
 
 
+def auction_dealer_verdict(p):
+    """딜러 비중은 낮을수록 수요가 강하므로 판정이 거꾸로입니다."""
+    return "-" if p is None else "낮음" if p < 20 else "높음" if p > 80 else "보통"
+
+
 # 4. 탭 화면 구성
 tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
@@ -2949,30 +2954,39 @@ with tab11:
 
 
 # ==========================================
-# [Page 12] 미국 국채 입찰 결과 (응찰배율 · 간접입찰 비중)
+# [Page 12] 미국 국채 입찰 결과 (응찰배율 · 간접입찰 · 프라이머리딜러 비중)
 # ==========================================
 with tab12:
     st.subheader("미국 국채 입찰 결과 — 수요 강도")
     st.caption(
         "재무부 공식 데이터(Note·Bond, 경쟁입찰 기준 = Treasury 발표 수치와 동일). "
-        "응찰배율 = 사겠다는 주문 ÷ 낙찰액, 간접입찰 비중 = 간접입찰 낙찰액 ÷ 낙찰액. "
-        "백분위는 같은 만기 과거 입찰 중 이번 값보다 낮았던 비율이며, 20% 미만 저조 · 80% 초과 강함으로 판정합니다."
+        "응찰배율 = 사겠다는 주문 ÷ 낙찰액, 간접입찰·딜러 비중 = 각 낙찰액 ÷ 전체 낙찰액."
     )
     auc, auc_err = get_auction_data()
     if auc_err or auc.empty:
         st.error(auc_err or "입찰 데이터가 없습니다.")
     else:
-        with st.expander("지표 읽는 법"):
+        with st.expander("지표 읽는 법 · '3년'과 '장기'가 뜻하는 것", expanded=False):
             st.markdown(
-                "- **응찰배율**: 높을수록 수요가 강합니다. 만기마다 평소 수준이 달라 **같은 만기끼리** 비교해야 합니다.\n"
-                "- **간접입찰**: 뉴욕연준을 통한 외국 중앙은행·해외 투자자·자산운용사 등. 높으면 딜러 밖 실수요가 많다는 뜻입니다"
-                "(‘간접 = 외국인’은 아닙니다). 통계는 2008년 4월부터만 있습니다.\n"
-                "- **딜러 비중**: 높을수록 실수요가 부족해 프라이머리딜러가 남은 물량을 받았다는 뜻입니다.\n"
-                "- 백분위 기준: **3년** = 최근 3년 같은 만기 입찰, **장기** = 응찰배율은 2000년~, 간접입찰은 2008년 4월~ 전체."
+                "**지표**\n"
+                "- **응찰배율**: 사겠다는 주문 ÷ 낙찰액. 높을수록 수요가 강합니다. 만기마다 평소 수준이 달라 **같은 만기끼리** 비교합니다.\n"
+                "- **간접입찰 비중**: 뉴욕연준을 통한 외국 중앙은행·해외 투자자·자산운용사 등의 낙찰 비중. 높을수록 딜러 밖 실수요가 많다는 뜻입니다"
+                "(‘간접 = 외국인’은 아닙니다).\n"
+                "- **프라이머리딜러 비중**: 입찰에서 팔리지 않은 물량을 최후에 떠안는 곳이 프라이머리딜러입니다. "
+                "**낮을수록** 실수요가 알아서 소화했다는 뜻(수요 강함), **높을수록** 딜러가 떠안은 물량이 많다는 뜻(수요 약함)입니다.\n\n"
+                "**'3년'과 '장기' = 이번 값이 과거 같은 만기 입찰 중 어디쯤인지(백분위, 0~100)**\n"
+                "- **100** = 비교 기간 중 가장 높았음 · **50** = 중간 · **0** = 가장 낮았음.\n"
+                "- **3년**: 최근 3년 같은 만기 입찰들과 비교(요즘 분위기 대비). "
+                "**장기**: 응찰배율은 2000년~, 간접입찰·딜러 비중은 2008년 4월~ 전체와 비교(역사적 대비).\n"
+                "- 예) 5년물 응찰배율 '3년 2' = 최근 3년 입찰 100번 중 이번보다 낮았던 건 2번뿐(거의 가장 약한 수준). "
+                "'장기 6' = 2000년 이후로 봐도 하위 6%.\n"
+                "- 판정: 응찰배율·간접입찰은 20 미만 **저조**, 80 초과 **강함**. 딜러 비중은 거꾸로 20 미만 **낮음(수요 강함)**, 80 초과 **높음(수요 약함)**.\n"
+                "- 3년과 장기 판정이 다르면 괄호로 장기 판정을 병기합니다."
             )
 
         # ── 만기별 최신 입찰 요약 ──
-        summary = []
+        PCT_LABELS = {"btc": "응찰배율", "indirect": "간접입찰(%)", "dealer": "딜러(%)"}
+        summary, notes = [], []
         for term in AUCTION_TERMS:
             d = auc[auc["security_term"] == term]
             if d.empty:
@@ -2983,18 +2997,22 @@ with tab12:
             row = {"만기": term, "입찰일": last["auction_date"].strftime("%Y-%m-%d"),
                    "발행액($B)": last["offering_amt"] / 1e9 if pd.notna(last["offering_amt"]) else None,
                    "낙찰금리(%)": last["high_yield"]}
-            for key, label in [("btc", "응찰배율"), ("indirect", "간접입찰(%)")]:
+            pcts = {}
+            for key, label in PCT_LABELS.items():
                 v = last[key]
                 row[label] = v
                 if pd.isna(v):
                     row[label + " 3년"], row[label + " 장기"], row[label + " 판정"] = None, None, "-"
                     continue
                 p3, pl = auction_percentile(h3[key], v), auction_percentile(hist[key], v)
-                v3, vl = auction_verdict(p3), auction_verdict(pl)
+                vf = auction_dealer_verdict if key == "dealer" else auction_verdict
+                v3, vl = vf(p3), vf(pl)
                 row[label + " 3년"], row[label + " 장기"] = p3, pl
                 row[label + " 판정"] = v3 if v3 == vl else f"{v3} (장기 {vl})"
-            row["딜러(%)"] = last["dealer"]
+                pcts[key] = (v, p3, pl)
+            row["직접(%)"] = last["direct"]
             summary.append(row)
+            notes.append((term, last, pcts))
         sdf = pd.DataFrame(summary)
 
         AUC_WEAK_C, AUC_STRONG_C = "#1c7ed6", "#e03131"
@@ -3002,51 +3020,92 @@ with tab12:
         def _verdict_style(v):
             if not isinstance(v, str):
                 return ""
-            if v.startswith("저조"):
+            if v.startswith(("저조", "높음")):
                 return f"color: {AUC_WEAK_C}; font-weight: 700"
-            if v.startswith("강함"):
+            if v.startswith(("강함", "낮음")):
                 return f"color: {AUC_STRONG_C}; font-weight: 700"
             return ""
 
-        st.markdown("**만기별 최신 입찰**")
+        tip3 = "최근 3년 같은 만기 입찰 중 이번 값보다 낮았던 비율(0~100). 100=3년 중 최고, 0=3년 중 최저"
+        tipL = "전체 기간(응찰배율 2000년~, 간접·딜러 2008년 4월~) 같은 만기 입찰 중 이번 값보다 낮았던 비율(0~100)"
+        cfg = {}
+        for label in PCT_LABELS.values():
+            cfg[label + " 3년"] = st.column_config.NumberColumn("3년 위치", help=tip3, format="%.0f")
+            cfg[label + " 장기"] = st.column_config.NumberColumn("장기 위치", help=tipL, format="%.0f")
+            cfg[label + " 판정"] = st.column_config.TextColumn("판정")
+        cfg["응찰배율"] = st.column_config.NumberColumn("응찰배율(배)", format="%.2f")
+        cfg["간접입찰(%)"] = st.column_config.NumberColumn("간접입찰(%)", format="%.1f")
+        cfg["딜러(%)"] = st.column_config.NumberColumn("딜러(%)", help="낮을수록 실수요가 소화한 입찰(수요 강함)", format="%.1f")
+        cfg["직접(%)"] = st.column_config.NumberColumn("직접(%)", format="%.1f")
+        cfg["발행액($B)"] = st.column_config.NumberColumn("발행액($B)", format="%.0f")
+        cfg["낙찰금리(%)"] = st.column_config.NumberColumn("낙찰금리(%)", format="%.3f")
+        order_cols = (["만기", "입찰일", "발행액($B)", "낙찰금리(%)"]
+                      + [c for l in PCT_LABELS.values() for c in (l, l + " 3년", l + " 장기", l + " 판정")] + ["직접(%)"])
+
+        st.markdown("**만기별 최신 입찰** — 열 이름에 마우스를 올리면 '3년 위치·장기 위치' 설명이 나옵니다")
         st.dataframe(
-            sdf.style.format({"발행액($B)": "{:.0f}", "낙찰금리(%)": "{:.3f}", "응찰배율": "{:.2f}",
-                              "응찰배율 3년": "{:.0f}", "응찰배율 장기": "{:.0f}",
-                              "간접입찰(%)": "{:.1f}", "간접입찰(%) 3년": "{:.0f}", "간접입찰(%) 장기": "{:.0f}",
-                              "딜러(%)": "{:.1f}"}, na_rep="-")
-                 .map(_verdict_style, subset=["응찰배율 판정", "간접입찰(%) 판정"]),
-            use_container_width=True, hide_index=True,
+            sdf[order_cols].style.map(_verdict_style, subset=[l + " 판정" for l in PCT_LABELS.values()]),
+            column_config=cfg, use_container_width=True, hide_index=True,
         )
-        st.caption("판정 색: 파랑 = 저조, 빨강 = 강함. '3년'·'장기' 열은 백분위(0~100)이며, 두 기준의 판정이 다르면 괄호로 장기 판정을 병기합니다.")
+        st.caption("판정 색: 빨강 = 수요 강함(응찰배율·간접 '강함', 딜러 '낮음'), 파랑 = 수요 약함(응찰배율·간접 '저조', 딜러 '높음'). "
+                   "3년/장기 위치는 0~100 백분위(100 = 과거 최고).")
+
+        # ── 만기별 한 줄 해석 ──
+        def _pos(p):
+            if p is None:
+                return "비교 불가"
+            return ("비교 기간 중 가장 낮은 수준" if p <= 3 else "낮은 편" if p < 20 else "평범한 수준" if p <= 80
+                    else "높은 편" if p < 97 else "비교 기간 중 가장 높은 수준")
+
+        st.markdown("**한눈에 읽기**")
+        lines = []
+        for term, last, pcts in notes:
+            parts = []
+            if "btc" in pcts:
+                v, p3, pl = pcts["btc"]
+                parts.append(f"응찰배율 **{v:.2f}배** — 3년 기준 {_pos(p3)}(위치 {p3:.0f}), 장기 기준 {_pos(pl)}(위치 {pl:.0f})"
+                             + (" → 주문이 평소보다 적게 몰렸음" if p3 is not None and p3 < 20 else
+                                " → 주문이 평소보다 많이 몰렸음" if p3 is not None and p3 > 80 else ""))
+            if "indirect" in pcts:
+                v, p3, pl = pcts["indirect"]
+                parts.append(f"간접입찰 **{v:.1f}%** — 3년 기준 {_pos(p3)}(위치 {p3:.0f})"
+                             + (" → 해외·운용사 등 실수요 낙찰이 적었음" if p3 is not None and p3 < 20 else
+                                " → 해외·운용사 등 실수요 낙찰이 많았음" if p3 is not None and p3 > 80 else ""))
+            if "dealer" in pcts:
+                v, p3, pl = pcts["dealer"]
+                parts.append(f"딜러 **{v:.1f}%** — 3년 기준 {_pos(p3)}(위치 {p3:.0f})"
+                             + (" → 팔리지 않아 딜러가 떠안은 물량이 거의 없었음(수요 강함)" if p3 is not None and p3 < 20 else
+                                " → 팔리지 않아 딜러가 떠안은 물량이 많았음(수요 약함)" if p3 is not None and p3 > 80 else ""))
+            lines.append(f"- **{term}** ({last['auction_date']:%m/%d}): " + " / ".join(parts))
+        st.markdown("\n".join(lines))
 
         st.divider()
 
-        # ── 만기별 장기 추이 ── 화면 왼쪽 절반만 사용, 오른쪽은 추후 사용을 위해 비워 둠
-        col_auc, col_auc_spare = st.columns([1, 1])
-        with col_auc:
-            c_term, c_per = st.columns([2, 3])
-            term_sel = c_term.radio("만기", AUCTION_TERMS, index=AUCTION_TERMS.index("10-Year"),
-                                    horizontal=True, key="auc_term")
-            per_sel = c_per.radio("기간", ["전체", "20년", "10년", "5년", "3년", "1년"], index=0,
-                                  horizontal=True, key="auc_period")
-            d = auc[auc["security_term"] == term_sel]
-            if per_sel != "전체":
-                d = d[d["auction_date"] >= d["auction_date"].max() - pd.DateOffset(years=int(per_sel[:-1]))]
+        # ── 만기별 장기 추이 ──
+        c_term, c_per = st.columns([2, 3])
+        term_sel = c_term.radio("만기", AUCTION_TERMS, index=AUCTION_TERMS.index("10-Year"),
+                                horizontal=True, key="auc_term")
+        per_sel = c_per.radio("기간", ["전체", "20년", "10년", "5년", "3년", "1년"], index=0,
+                              horizontal=True, key="auc_period")
+        d = auc[auc["security_term"] == term_sel]
+        if per_sel != "전체":
+            d = d[d["auction_date"] >= d["auction_date"].max() - pd.DateOffset(years=int(per_sel[:-1]))]
 
-            fig_a = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                                  subplot_titles=("응찰배율 (배)", "간접입찰 비중 (%)"))
-            for r, (key, color) in enumerate([("btc", "#1f77b4"), ("indirect", "#2ca02c")], start=1):
-                dd = d.dropna(subset=[key])
-                fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key], mode="markers", name="개별 입찰",
-                                           marker=dict(size=5, color=color, opacity=0.45), showlegend=False,
-                                           hovertemplate="%{x|%Y-%m-%d}: %{y:.2f}<extra></extra>"), row=r, col=1)
-                fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key].rolling(8, min_periods=1).mean(),
-                                           mode="lines", line=dict(color="#e8590c", width=2), name="8회 이동평균",
-                                           showlegend=(r == 1), hoverinfo="skip"), row=r, col=1)
-            fig_a.update_layout(height=560, margin=dict(l=20, r=20, t=40, b=20),
-                                legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1))
-            st.plotly_chart(fig_a, use_container_width=True, config={"scrollZoom": False})
-            st.caption("점 = 개별 입찰, 주황선 = 최근 8회 이동평균. 간접입찰은 2008년 4월 이전 데이터가 없어 그 이전 구간은 비어 있습니다.")
+        fig_a = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+                              subplot_titles=("응찰배율 (배) — 높을수록 수요 강함", "간접입찰 비중 (%) — 높을수록 실수요 많음",
+                                              "프라이머리딜러 비중 (%) — 낮을수록 수요 강함"))
+        for r, (key, color) in enumerate([("btc", "#1f77b4"), ("indirect", "#2ca02c"), ("dealer", "#9467bd")], start=1):
+            dd = d.dropna(subset=[key])
+            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key], mode="markers", name="개별 입찰",
+                                       marker=dict(size=5, color=color, opacity=0.45), showlegend=(r == 1),
+                                       hovertemplate="%{x|%Y-%m-%d}: %{y:.2f}<extra></extra>"), row=r, col=1)
+            fig_a.add_trace(go.Scatter(x=dd["auction_date"], y=dd[key].rolling(8, min_periods=1).mean(),
+                                       mode="lines", line=dict(color="#e8590c", width=2), name="8회 이동평균",
+                                       showlegend=(r == 1), hoverinfo="skip"), row=r, col=1)
+        fig_a.update_layout(height=780, margin=dict(l=20, r=20, t=40, b=20),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1))
+        st.plotly_chart(fig_a, use_container_width=True, config={"scrollZoom": False})
+        st.caption("점 = 개별 입찰, 주황선 = 최근 8회 이동평균. 간접입찰·딜러 비중은 2008년 4월 이전 데이터가 없어 그 이전 구간은 비어 있습니다.")
 
         with st.expander(f"{term_sel} 최근 입찰 20건 보기"):
             recent = auc[auc["security_term"] == term_sel].tail(20).iloc[::-1]
@@ -3061,9 +3120,6 @@ with tab12:
                          use_container_width=True, hide_index=True)
 
 
-# ==========================================
-# [Page 13] 외국인 증권투자 동향 (금융감독원 월별 보도자료)
-# 데이터: fss_foreign/parsed.json (월 1회 자동 갱신), 차트: fss_foreign/build.py
 # ==========================================
 with tab13:
     import importlib.util
