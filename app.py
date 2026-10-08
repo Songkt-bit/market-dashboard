@@ -1466,7 +1466,7 @@ def get_yearly_returns(raw_ticker):
 # 간접입찰 통계는 2008년 4월부터만 존재합니다(그 이전은 null).
 AUCTION_API = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query"
 AUCTION_TERMS = ["2-Year", "3-Year", "5-Year", "7-Year", "10-Year", "20-Year", "30-Year"]
-AUCTION_FIELDS = ("auction_date,security_type,security_term,reopening,offering_amt,comp_tendered,comp_accepted,"
+AUCTION_FIELDS = ("auction_date,security_type,security_term,original_security_term,reopening,offering_amt,comp_tendered,comp_accepted,"
                   "indirect_bidder_accepted,direct_bidder_accepted,primary_dealer_accepted,high_yield")
 
 
@@ -1490,6 +1490,8 @@ def get_auction_data():
 
     df = pd.DataFrame(rows).replace("null", pd.NA)
     df["auction_date"] = pd.to_datetime(df["auction_date"])
+    # 재발행(reopening) 입찰은 security_term이 남은 만기("9-Year 10-Month")로 찍혀 있어 원래 만기로 묶습니다
+    df["security_term"] = df["original_security_term"]
     for c in ["offering_amt", "comp_tendered", "comp_accepted", "indirect_bidder_accepted",
               "direct_bidder_accepted", "primary_dealer_accepted", "high_yield"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
