@@ -3936,13 +3936,27 @@ def get_naver_news(keyword: str, total: int, cid: str, sec: str):
 
 with tab16:
     st.subheader("📰 네이버 뉴스 키워드 검색")
-    try:
-        _nv_id, _nv_sec = st.secrets.get("NAVER_CLIENT_ID", ""), st.secrets.get("NAVER_CLIENT_SECRET", "")
-    except Exception:
-        _nv_id = _nv_sec = ""
+    def _naver_secret(*names):
+        """최상위 키 또는 [naver] 같은 섹션 안의 키를 이름 대소문자 무관하게 찾음 → 없으면 환경변수."""
+        try:
+            flat = {str(k).upper(): v for k, v in st.secrets.items() if not hasattr(v, "items")}
+            for sec_name, sec in st.secrets.items():
+                if hasattr(sec, "items"):
+                    flat.update({f"{str(sec_name).upper()}_{str(k).upper()}": v for k, v in sec.items()})
+                    flat.update({str(k).upper(): v for k, v in sec.items() if str(k).upper() not in flat})
+        except Exception:
+            flat = {}
+        for n in names:
+            v = flat.get(n) or os.environ.get(n, "")
+            if v:
+                return str(v).strip()
+        return ""
+    _nv_id = _naver_secret("NAVER_CLIENT_ID", "NAVER_ID", "CLIENT_ID")
+    _nv_sec = _naver_secret("NAVER_CLIENT_SECRET", "NAVER_SECRET", "CLIENT_SECRET")
     if not (_nv_id and _nv_sec):
         st.warning("Secrets에 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`을 넣어야 동작합니다 "
                    "(로컬은 .streamlit/secrets.toml, Streamlit Cloud는 App settings → Secrets).")
+        st.caption(f"현재 Secrets 키 이름: {_secret_key_names()}")
     else:
         c1, c2 = st.columns([3, 1])
         nv_kw = c1.text_input("검색 키워드", value="클래시스", key="nv_kw")
