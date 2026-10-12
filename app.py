@@ -1718,14 +1718,14 @@ def get_stock_flows(code: str, start: str):
 
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
     "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목·수급",
     "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오",
-    "🛡️ Page 15: 환헤지 타당성"
+    "🛡️ Page 15: 환헤지 타당성", "📰 Page 16: 뉴스 검색"
 ])
 
 # ==========================================
@@ -3865,3 +3865,142 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
 - **연기금**: 국민연금 등. 자산배분 리밸런싱(주가 급락 시 매수, 급등 시 매도)으로 역추세 성격이 강합니다.
 - **기타법인**: 일반 기업. 자사주 매입·소각이 늘면 크게 순매수로 잡힙니다(코스피 개인+외국인+기관 합이 0이 안 되는 주된 이유).
             """)
+
+
+# ==========================================
+# [Page 16] 네이버 뉴스 키워드 검색 (네이버 검색 Open API — 최신순 최대 1,000건)
+# 키: Secrets의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (developers.naver.com → 검색 API)
+# ==========================================
+NAVER_PRESS = {
+    "yna.co.kr": "연합뉴스", "yonhapnewstv.co.kr": "연합뉴스TV", "newsis.com": "뉴시스", "news1.kr": "뉴스1",
+    "hankyung.com": "한국경제", "mk.co.kr": "매일경제", "sedaily.com": "서울경제", "edaily.co.kr": "이데일리",
+    "mt.co.kr": "머니투데이", "fnnews.com": "파이낸셜뉴스", "asiae.co.kr": "아시아경제", "heraldcorp.com": "헤럴드경제",
+    "etoday.co.kr": "이투데이", "chosun.com": "조선일보", "joongang.co.kr": "중앙일보", "donga.com": "동아일보",
+    "hani.co.kr": "한겨레", "khan.co.kr": "경향신문", "kmib.co.kr": "국민일보", "seoul.co.kr": "서울신문",
+    "segye.com": "세계일보", "hankookilbo.com": "한국일보", "munhwa.com": "문화일보", "etnews.com": "전자신문",
+    "dt.co.kr": "디지털타임스", "zdnet.co.kr": "지디넷코리아", "newspim.com": "뉴스핌", "inews24.com": "아이뉴스24",
+    "ajunews.com": "아주경제", "nocutnews.co.kr": "노컷뉴스", "sbs.co.kr": "SBS", "kbs.co.kr": "KBS",
+    "imbc.com": "MBC", "jtbc.co.kr": "JTBC", "mbn.co.kr": "MBN", "ytn.co.kr": "YTN", "sbsbiz.co.kr": "SBS Biz",
+    "wowtv.co.kr": "한국경제TV", "mtn.co.kr": "머니투데이방송", "thebell.co.kr": "더벨", "dailypharm.com": "데일리팜",
+    "yakup.com": "약업신문", "medipana.com": "메디파나", "hitnews.co.kr": "히트뉴스", "pinpointnews.co.kr": "핀포인트뉴스", "biospectator.com": "바이오스펙테이터",
+    "pharmnews.com": "팜뉴스", "businesspost.co.kr": "비즈니스포스트", "newsway.co.kr": "뉴스웨이", "ebn.co.kr": "EBN",
+    "dailian.co.kr": "데일리안", "viva100.com": "브릿지경제", "kukinews.com": "쿠키뉴스", "medicaltimes.com": "메디칼타임즈",
+}
+
+
+def _naver_press(url: str) -> str:
+    host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
+    for dom, name in NAVER_PRESS.items():
+        if host == dom or host.endswith("." + dom):
+            return name
+    return host or "네이버"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_naver_news(keyword: str, total: int, cid: str, sec: str):
+    """최신순 최대 total건 수집 → 같은 제목(여러 매체 재게재)은 하나로 묶음. 반환: (DataFrame, 원본 건수, API 전체 건수)"""
+    import html as _html, re as _re
+    from email.utils import parsedate_to_datetime
+    clean = lambda s: _html.unescape(_re.sub(r"<[^>]+>", "", s or "")).strip()
+    raw, api_total = [], 0
+    for start in range(1, min(total, 1000) + 1, 100):
+        r = requests.get("https://openapi.naver.com/v1/search/news.json", timeout=15,
+                         params={"query": keyword, "display": 100, "start": start, "sort": "date"},
+                         headers={"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": sec})
+        r.raise_for_status()
+        data = r.json()
+        api_total = data.get("total", 0)
+        raw += data.get("items", [])
+        if len(data.get("items", [])) < 100:
+            break
+    groups = {}
+    for it in raw[:total]:
+        title = clean(it["title"])
+        key = _re.sub(r"[\W_]+", "", _re.sub(r"\[[^\]]*\]", "", title))   # [속보] 등 머리말·기호 무시
+        url = it.get("originallink") or it["link"]
+        if key in groups:
+            groups[key]["동일기사"].append(_naver_press(url))
+            continue
+        groups[key] = {
+            "일시": parsedate_to_datetime(it["pubDate"]).replace(tzinfo=None), "언론사": _naver_press(url),
+            "제목": title, "요약": clean(it["description"]), "원문": url,
+            "네이버": it["link"] if "news.naver.com" in it["link"] else "", "동일기사": [],
+        }
+    df = pd.DataFrame(groups.values())
+    if not df.empty:
+        df["재게재"] = df["동일기사"].str.len()
+        df["동일기사"] = df["동일기사"].str.join(", ")
+        df = df.sort_values("일시", ascending=False, ignore_index=True)
+    return df, len(raw[:total]), api_total
+
+
+with tab16:
+    st.subheader("📰 네이버 뉴스 키워드 검색")
+    try:
+        _nv_id, _nv_sec = st.secrets.get("NAVER_CLIENT_ID", ""), st.secrets.get("NAVER_CLIENT_SECRET", "")
+    except Exception:
+        _nv_id = _nv_sec = ""
+    if not (_nv_id and _nv_sec):
+        st.warning("Secrets에 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`을 넣어야 동작합니다 "
+                   "(로컬은 .streamlit/secrets.toml, Streamlit Cloud는 App settings → Secrets).")
+    else:
+        c1, c2 = st.columns([3, 1])
+        nv_kw = c1.text_input("검색 키워드", value="클래시스", key="nv_kw")
+        nv_n = c2.selectbox("수집 개수 (최신순)", [100, 300, 500, 1000], index=3, key="nv_n")
+        if nv_kw.strip():
+            try:
+                with st.spinner(f"'{nv_kw}' 뉴스 수집 중…"):
+                    nv_df, nv_raw, nv_api_total = get_naver_news(nv_kw.strip(), nv_n, _nv_id, _nv_sec)
+            except requests.HTTPError as e:
+                st.error(f"네이버 API 오류 {e.response.status_code}: {e.response.text[:300]}")
+                nv_df = None
+            if nv_df is not None and nv_df.empty:
+                st.info("검색 결과가 없습니다.")
+            elif nv_df is not None:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("수집 기사", f"{nv_raw:,}", help=f"네이버 전체 검색 결과 {nv_api_total:,}건 중 최신순")
+                m2.metric("중복 정리 후", f"{len(nv_df):,}")
+                m3.metric("같은 기사 재게재", f"{int(nv_df['재게재'].sum()):,}")
+                m4.metric("기간", f"{nv_df['일시'].min():%m/%d} ~ {nv_df['일시'].max():%m/%d}")
+
+                daily = nv_df.groupby(nv_df["일시"].dt.normalize()).size()
+                daily = daily.reindex(pd.date_range(daily.index.min(), daily.index.max()), fill_value=0)
+                cc1, cc2 = st.columns([2.2, 1])
+                fig = go.Figure(go.Bar(x=daily.index, y=daily.values, marker_color="#4C78A8",
+                                       hovertemplate="%{x|%Y-%m-%d}: %{y}건<extra></extra>"))
+                fig.update_layout(title="일자별 기사 수", height=300, margin=dict(l=10, r=10, t=40, b=10),
+                                  yaxis_title="건", bargap=0.15)
+                cc1.plotly_chart(fig, use_container_width=True)
+                press = nv_df["언론사"].value_counts().rename_axis("언론사").reset_index(name="건수")
+                cc2.dataframe(press, use_container_width=True, hide_index=True, height=300)
+
+                f1, f2, f3 = st.columns([2, 1, 1])
+                q = f1.text_input("결과 안에서 검색 (제목·요약)", key="nv_q")
+                days = ["전체"] + [f"{d:%Y-%m-%d}" for d in sorted(nv_df["일시"].dt.normalize().unique(), reverse=True)]
+                pick_day = f2.selectbox("날짜", days, key="nv_day")
+                pick_press = f3.selectbox("언론사", ["전체"] + press["언론사"].tolist(), key="nv_press")
+                view = nv_df
+                if q:
+                    view = view[view["제목"].str.contains(q, case=False, regex=False)
+                                | view["요약"].str.contains(q, case=False, regex=False)]
+                if pick_day != "전체":
+                    view = view[view["일시"].dt.strftime("%Y-%m-%d") == pick_day]
+                if pick_press != "전체":
+                    view = view[view["언론사"] == pick_press]
+
+                st.dataframe(
+                    view[["일시", "언론사", "제목", "요약", "재게재", "원문", "네이버"]],
+                    use_container_width=True, hide_index=True, height=600,
+                    column_config={
+                        "일시": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm", width="small"),
+                        "제목": st.column_config.TextColumn(width="large"),
+                        "요약": st.column_config.TextColumn(width="large"),
+                        "재게재": st.column_config.NumberColumn("동일기사", help="같은 제목으로 실린 다른 매체 수", width="small"),
+                        "원문": st.column_config.LinkColumn(display_text="원문 ↗", width="small"),
+                        "네이버": st.column_config.LinkColumn(display_text="네이버 ↗", width="small"),
+                    })
+                st.caption(f"{len(view):,}건 표시 · 표 머리글을 누르면 정렬, 링크를 누르면 기사로 이동합니다. "
+                           "네이버 API는 키워드당 최신 1,000건까지만 제공합니다.")
+                st.download_button(
+                    "CSV 저장", view.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"{nv_kw.strip()}_뉴스_{datetime.date.today():%Y%m%d}.csv", mime="text/csv")
