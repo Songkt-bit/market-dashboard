@@ -1518,15 +1518,59 @@ def auction_dealer_verdict(p):
     return "-" if p is None else "낮음" if p < 20 else "높음" if p > 80 else "보통"
 
 
+# ---------------------------------------------------------------------------
+# Page 16 — 코스피·코스닥 투자자별 일별 순매수 (네이버 증권, 로그인 불필요)
+# ---------------------------------------------------------------------------
+# KRX는 로그인이 필요해 네이버 모바일 API를 씁니다. 하루 단위 조회만 되므로 영업일마다
+# 병렬로 요청(1년 ≈ 250건, 2초 내외). 휴장일은 세 값이 모두 0으로 와서 제외합니다. 단위 억원.
+INV_MARKETS = {"코스피": ("KOSPI", "^KS11"), "코스닥": ("KOSDAQ", "^KQ11")}
+INV_COLS = {"personalValue": "개인", "foreignValue": "외국인", "institutionalValue": "기관"}
+INV_COLORS = {"개인": "#f4a261", "외국인": "#e63946", "기관": "#1d4e89"}
+INV_PERIODS = {"1개월": 31, "3개월": 92, "6개월": 183, "YTD": None, "1년": 365, "3년": 1096, "5년": 1827}
+
+
+def _eok(v):
+    """억원 → 1조 이상은 조 단위 표기 (지표 칸이 좁아 잘리지 않게)"""
+    return f"{v / 1e4:+,.1f}조" if abs(v) >= 1e4 else f"{v:+,.0f}억"
+
+
+def _naver_investor_day(market: str, day: str):
+    r = requests.get(f"https://m.stock.naver.com/api/index/{market}/trend", params={"bizdate": day},
+                     headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    r.raise_for_status()
+    j = r.json()
+    return {"date": day, **{v: int(str(j.get(k, "0")).replace(",", "").replace("+", "") or 0) for k, v in INV_COLS.items()}}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_investor_flows(market: str, start: str, end: str):
+    """(DataFrame[개인,외국인,기관] 억원·일자 인덱스, 실패 건수)"""
+    days = [d.strftime("%Y%m%d") for d in pd.bdate_range(start, end)]
+    def one(d):
+        try:
+            return _naver_investor_day(market, d)
+        except Exception:
+            return None
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        rows = list(ex.map(one, days))
+    fails = sum(r is None for r in rows)
+    df = pd.DataFrame([r for r in rows if r])
+    if df.empty:
+        return pd.DataFrame(columns=list(INV_COLS.values())), fails
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
+    return df[(df != 0).any(axis=1)], fails
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
     "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률",
     "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오",
-    "🛡️ Page 15: 환헤지 타당성"
+    "🛡️ Page 15: 환헤지 타당성", "🧭 Page 16: 투자자별 순매수"
 ])
 
 # ==========================================
@@ -3477,3 +3521,81 @@ with tab15:
 - 실제 헤지비용은 3개월물 FX스왑포인트·**CRS 베이시스(달러 프리미엄)**, 롤오버 시점 금리 변동에 따라 달라집니다. 이 화면은 **정책금리 기반 개략치**이며 ±0.3%p 이내는 '비슷'으로 표시합니다.
 - 헤지를 하지 않으면 환율 변동 위험을 그대로 지므로 위 비교는 '헤지 시' 기준입니다. 韓 10Y는 네이버 금융(국고채 10년), 韓 기준금리는 ECOS(접속 가능할 때)에서 가져옵니다. 日 10Y는 일본 재무성, 美 10Y는 ^TNX(야후) 기준입니다.
         """)
+
+with tab16:
+    st.subheader("🧭 코스피·코스닥 투자자별 순매수")
+    c1, c2 = st.columns([3, 2])
+    inv_per = c1.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="inv_per")
+    inv_cum_from = c2.radio("누적 기준", ["기간 시작일", "올해 1월 1일"], horizontal=True, key="inv_cum",
+                            help="누적 순매수를 어디서부터 더할지. '올해 1월 1일'은 기간이 1년보다 짧을 때만 의미가 있습니다.")
+    today = datetime.date.today()
+    inv_start = datetime.date(today.year, 1, 1) if INV_PERIODS[inv_per] is None else today - datetime.timedelta(days=INV_PERIODS[inv_per])
+    fetch_start = min(inv_start, datetime.date(today.year, 1, 1)) if inv_cum_from == "올해 1월 1일" else inv_start
+
+    def _inv_charts(name):
+        code, ytk = INV_MARKETS[name]
+        with st.spinner(f"{name} 투자자별 매매동향 수집 중…"):
+            raw, fails = get_investor_flows(code, fetch_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
+        if raw.empty:
+            st.warning(f"{name} 데이터를 받지 못했습니다. (네이버 증권 응답 없음)")
+            return
+        cum = raw.cumsum()
+        d, cum = raw[raw.index >= pd.Timestamp(inv_start)], cum[cum.index >= pd.Timestamp(inv_start)]
+        if inv_cum_from == "기간 시작일":
+            cum = d.cumsum()
+        px_s = get_single_index_close(ytk, (d.index.min() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
+        px_s = px_s[px_s.index >= d.index.min()]
+
+        last = d.index.max()
+        m = st.columns(3)
+        for col, inv in zip(m, INV_COLS.values()):
+            col.metric(f"{inv} 누적", _eok(cum[inv].iloc[-1]), f"{_eok(d[inv].iloc[-1])} ({last:%m/%d})",
+                       delta_color="inverse")   # 한국식: 순매수(+)=빨강
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        for inv in INV_COLS.values():
+            fig.add_bar(x=d.index, y=d[inv], name=inv, marker_color=INV_COLORS[inv],
+                        hovertemplate="%{y:+,.0f}억<extra>" + inv + "</extra>", secondary_y=False)
+        fig.add_scatter(x=px_s.index, y=px_s.values, name=name, line=dict(color="#9aa3af", width=1.5),
+                        hovertemplate="%{y:,.2f}<extra>" + name + "</extra>", secondary_y=True)
+        fig.update_layout(barmode="group", bargap=0.15)
+        fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
+        fig.update_yaxes(secondary_y=True, showgrid=False)
+        apply_title_and_legend(fig, f"{name} 일별 순매수", height=380)
+        fig.update_layout(hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"inv_d_{code}")
+
+        jo = cum.abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
+        cy, unit, hfmt = (cum / 1e4, "조원", "%{y:+,.2f}조") if jo else (cum, "억원", "%{y:+,.0f}억")
+        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+        for inv in INV_COLS.values():
+            fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, line=dict(color=INV_COLORS[inv], width=2.2),
+                             hovertemplate=hfmt + "<extra>" + inv + "</extra>", secondary_y=False)
+            fig2.add_annotation(x=cy.index[-1], y=cy[inv].iloc[-1], text=_eok(cum[inv].iloc[-1]),
+                                showarrow=False, xanchor="left", font=dict(color=INV_COLORS[inv], size=11))
+        fig2.add_scatter(x=px_s.index, y=px_s.values, name=name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
+                         hovertemplate="%{y:,.2f}<extra>" + name + "</extra>", secondary_y=True)
+        fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
+        fig2.update_yaxes(secondary_y=True, showgrid=False)
+        apply_title_and_legend(fig2, f"{name} 누적 순매수 ({'올해 1/1' if inv_cum_from != '기간 시작일' else f'{inv_start:%Y-%m-%d}'}부터)", height=380)
+        fig2.update_layout(hovermode="x unified", margin=dict(r=60))
+        st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"inv_c_{code}")
+
+        with st.expander(f"{name} 일별 표"):
+            t = d.join(cum.add_suffix(" 누적")).sort_index(ascending=False)
+            t.index = t.index.strftime("%Y-%m-%d")
+            st.dataframe(t.style.format("{:+,.0f}"), use_container_width=True)
+        if fails:
+            st.caption(f"⚠️ {fails}일 조회 실패 — 잠시 후 새로고침하면 다시 시도합니다.")
+        return last
+
+    lc, rc = st.columns(2)
+    with lc:
+        st.markdown("#### 코스피")
+        last_k = _inv_charts("코스피")
+    with rc:
+        st.markdown("#### 코스닥")
+        _inv_charts("코스닥")
+    st.caption("출처: 네이버 증권(한국거래소 집계) · 단위 억원 · 기관 = 금융투자·보험·투신·사모·은행·연기금 등 합계, "
+               "기타법인(자사주 매입 등)은 미포함이라 세 주체 합이 0이 아님 · 회색선 = 지수 종가(우측 축) · 30분 캐시"
+               + (f" · 최신 {last_k:%Y-%m-%d}" if last_k is not None else ""))
