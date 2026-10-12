@@ -1519,19 +1519,45 @@ def auction_dealer_verdict(p):
 
 
 # ---------------------------------------------------------------------------
-# Page 16 — 코스피·코스닥 투자자별 일별 순매수 (네이버 증권, 로그인 불필요)
+# Page 16 — 코스피·코스닥 투자자별 일별 순매수 (Daum 금융 → 실패 시 네이버, 로그인 불필요)
 # ---------------------------------------------------------------------------
-# KRX는 로그인이 필요해 네이버 모바일 API를 씁니다. 하루 단위 조회만 되므로 영업일마다
-# 병렬로 요청(1년 ≈ 250건, 2초 내외). 휴장일은 세 값이 모두 0으로 와서 제외합니다. 단위 억원.
+# KRX는 로그인이 필요해 포털 API를 씁니다. Daum은 500일씩 페이지로 주고 연기금·금융투자 등
+# 세부 주체까지 나옵니다(원 단위 → 억원 환산). Daum이 막히면 네이버(하루 1건, 개인·외국인·기관만)로 대체.
 INV_MARKETS = {"코스피": ("KOSPI", "^KS11"), "코스닥": ("KOSDAQ", "^KQ11")}
-INV_COLS = {"personalValue": "개인", "foreignValue": "외국인", "institutionalValue": "기관"}
-INV_COLORS = {"개인": "#f4a261", "외국인": "#e63946", "기관": "#1d4e89"}
+INV_DAUM = {"INDIVIDUAL": "개인", "FOREIGN": "외국인", "FINANCIAL_INVESTOR": "금융투자",
+            "PENSION_FUND": "연기금", "ETC_CORPORATION": "기타법인"}
+INV_ALL = ["개인", "외국인", "기관", "금융투자", "연기금", "기타법인"]
+INV_COLORS = {"개인": "#f4a261", "외국인": "#e63946", "기관": "#1d4e89",
+              "금융투자": "#8e6cc7", "연기금": "#2a9d8f", "기타법인": "#8d8d8d"}
 INV_PERIODS = {"1개월": 31, "3개월": 92, "6개월": 183, "YTD": None, "1년": 365, "3년": 1096, "5년": 1827}
+_NAVER_COLS = {"personalValue": "개인", "foreignValue": "외국인", "institutionalValue": "기관"}
 
 
 def _eok(v):
-    """억원 → 1조 이상은 조 단위 표기 (지표 칸이 좁아 잘리지 않게)"""
+    """억원 → 1조 이상은 조 단위 표기 (칸이 좁아 잘리지 않게)"""
     return f"{v / 1e4:+,.1f}조" if abs(v) >= 1e4 else f"{v:+,.0f}억"
+
+
+def _daum_investor_flows(market: str, start: pd.Timestamp):
+    rows, page = [], 1
+    while True:
+        r = requests.get(f"https://finance.daum.net/api/investor/{market}/days",
+                         params={"page": page, "perPage": 500, "pagination": "true", "details": "true"},
+                         headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.daum.net/domestic/investors"},
+                         timeout=15)
+        r.raise_for_status()
+        j = r.json()
+        for x in j["data"]:
+            det = x.get("details") or {}
+            row = {v: det.get(k) for k, v in INV_DAUM.items()}
+            row.update({"date": pd.Timestamp(x["date"][:10]), "기관": x.get("institutionStraightPurchasePrice"),
+                        "개인": x.get("individualStraightPurchasePrice"), "외국인": x.get("foreignStraightPurchasePrice")})
+            rows.append(row)
+        if not j["data"] or rows[-1]["date"] < start or page >= j.get("totalPages", page):
+            break
+        page += 1
+    df = pd.DataFrame(rows).set_index("date").sort_index()
+    return df[INV_ALL].astype(float) / 1e8
 
 
 def _naver_investor_day(market: str, day: str):
@@ -1539,27 +1565,43 @@ def _naver_investor_day(market: str, day: str):
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     r.raise_for_status()
     j = r.json()
-    return {"date": day, **{v: int(str(j.get(k, "0")).replace(",", "").replace("+", "") or 0) for k, v in INV_COLS.items()}}
+    return {"date": day, **{v: int(str(j.get(k, "0")).replace(",", "").replace("+", "") or 0) for k, v in _NAVER_COLS.items()}}
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_investor_flows(market: str, start: str, end: str):
-    """(DataFrame[개인,외국인,기관] 억원·일자 인덱스, 실패 건수)"""
-    days = [d.strftime("%Y%m%d") for d in pd.bdate_range(start, end)]
+    """(DataFrame[INV_ALL] 억원·일자 인덱스, 출처). 네이버로 대체되면 세부 주체 열은 NaN."""
+    s, e = pd.Timestamp(start), pd.Timestamp(end)
+    try:
+        df = _daum_investor_flows(market, s)
+        df = df[(df.index >= s) & (df.index <= e)]
+        if not df.empty:
+            return df[(df.fillna(0) != 0).any(axis=1)], "Daum 금융"
+    except Exception:
+        pass
+
     def one(d):
         try:
             return _naver_investor_day(market, d)
         except Exception:
             return None
     with ThreadPoolExecutor(max_workers=16) as ex:
-        rows = list(ex.map(one, days))
-    fails = sum(r is None for r in rows)
-    df = pd.DataFrame([r for r in rows if r])
-    if df.empty:
-        return pd.DataFrame(columns=list(INV_COLS.values())), fails
+        rows = [r for r in ex.map(one, [d.strftime("%Y%m%d") for d in pd.bdate_range(s, e)]) if r]
+    if not rows:
+        return pd.DataFrame(columns=INV_ALL, dtype=float), "-"
+    df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date").sort_index()
-    return df[(df != 0).any(axis=1)], fails
+    df = df.set_index("date").sort_index().reindex(columns=INV_ALL).astype(float)
+    return df[(df.fillna(0) != 0).any(axis=1)], "네이버 증권(개인·외국인·기관만)"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_usdkrw(start_date_str: str):
+    df = yf.download("KRW=X", start=start_date_str, progress=False)
+    if df.empty:
+        return pd.Series(dtype=float)
+    close = df["Close"] if isinstance(df.columns, pd.MultiIndex) else df[["Close"]]
+    return close.iloc[:, 0].dropna()
 
 
 # 4. 탭 화면 구성
@@ -3527,33 +3569,46 @@ with tab16:
     c1, c2 = st.columns([3, 2])
     inv_per = c1.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="inv_per")
     inv_cum_from = c2.radio("누적 기준", ["기간 시작일", "올해 1월 1일"], horizontal=True, key="inv_cum",
-                            help="누적 순매수를 어디서부터 더할지. '올해 1월 1일'은 기간이 1년보다 짧을 때만 의미가 있습니다.")
+                            help="누적 순매수를 어디서부터 더할지. '올해 1월 1일'은 기간이 YTD보다 짧을 때만 의미가 있습니다.")
+    inv_sel = st.multiselect("투자자", INV_ALL, default=["개인", "외국인", "기관", "금융투자", "연기금"], key="inv_sel",
+                             help="금융투자·연기금은 '기관'에 포함된 세부 항목입니다.")
     today = datetime.date.today()
     inv_start = datetime.date(today.year, 1, 1) if INV_PERIODS[inv_per] is None else today - datetime.timedelta(days=INV_PERIODS[inv_per])
-    fetch_start = min(inv_start, datetime.date(today.year, 1, 1)) if inv_cum_from == "올해 1월 1일" else inv_start
+    cum_base = datetime.date(today.year, 1, 1) if inv_cum_from == "올해 1월 1일" and inv_start > datetime.date(today.year, 1, 1) else inv_start
+    cum_label = f"{cum_base:%Y-%m-%d}부터"
+    inv_res, inv_src = {}, set()
+
+    def _inv_load(name):
+        code, _ = INV_MARKETS[name]
+        with st.spinner(f"{name} 투자자별 매매동향 수집 중…"):
+            raw, src = get_investor_flows(code, cum_base.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
+        if raw.empty:
+            return None
+        inv_src.add(src)
+        d = raw[raw.index >= pd.Timestamp(inv_start)]
+        return d, raw.cumsum().loc[d.index]
 
     def _inv_charts(name):
-        code, ytk = INV_MARKETS[name]
-        with st.spinner(f"{name} 투자자별 매매동향 수집 중…"):
-            raw, fails = get_investor_flows(code, fetch_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
-        if raw.empty:
-            st.warning(f"{name} 데이터를 받지 못했습니다. (네이버 증권 응답 없음)")
+        res = _inv_load(name)
+        if res is None:
+            st.warning(f"{name} 데이터를 받지 못했습니다. (Daum·네이버 모두 응답 없음)")
             return
-        cum = raw.cumsum()
-        d, cum = raw[raw.index >= pd.Timestamp(inv_start)], cum[cum.index >= pd.Timestamp(inv_start)]
-        if inv_cum_from == "기간 시작일":
-            cum = d.cumsum()
+        d, cum = inv_res[name] = res
+        code, ytk = INV_MARKETS[name]
+        sel = [c for c in inv_sel if d[c].notna().any()]
+        if not sel:
+            st.info("표시할 투자자를 선택해주세요.")
+            return
+        last = d.index.max()
+        summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
+        st.dataframe(summ.style.format(_eok).map(lambda v: f"color: {'#d62828' if v > 0 else '#1d4e89' if v < 0 else 'inherit'}"),
+                     use_container_width=True)
+
         px_s = get_single_index_close(ytk, (d.index.min() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
         px_s = px_s[px_s.index >= d.index.min()]
 
-        last = d.index.max()
-        m = st.columns(3)
-        for col, inv in zip(m, INV_COLS.values()):
-            col.metric(f"{inv} 누적", _eok(cum[inv].iloc[-1]), f"{_eok(d[inv].iloc[-1])} ({last:%m/%d})",
-                       delta_color="inverse")   # 한국식: 순매수(+)=빨강
-
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        for inv in INV_COLS.values():
+        for inv in sel:
             fig.add_bar(x=d.index, y=d[inv], name=inv, marker_color=INV_COLORS[inv],
                         hovertemplate="%{y:+,.0f}억<extra>" + inv + "</extra>", secondary_y=False)
         fig.add_scatter(x=px_s.index, y=px_s.values, name=name, line=dict(color="#9aa3af", width=1.5),
@@ -3565,10 +3620,10 @@ with tab16:
         fig.update_layout(hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"inv_d_{code}")
 
-        jo = cum.abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
+        jo = cum[sel].abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
         cy, unit, hfmt = (cum / 1e4, "조원", "%{y:+,.2f}조") if jo else (cum, "억원", "%{y:+,.0f}억")
         fig2 = make_subplots(specs=[[{"secondary_y": True}]])
-        for inv in INV_COLS.values():
+        for inv in sel:
             fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, line=dict(color=INV_COLORS[inv], width=2.2),
                              hovertemplate=hfmt + "<extra>" + inv + "</extra>", secondary_y=False)
             fig2.add_annotation(x=cy.index[-1], y=cy[inv].iloc[-1], text=_eok(cum[inv].iloc[-1]),
@@ -3577,25 +3632,117 @@ with tab16:
                          hovertemplate="%{y:,.2f}<extra>" + name + "</extra>", secondary_y=True)
         fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
         fig2.update_yaxes(secondary_y=True, showgrid=False)
-        apply_title_and_legend(fig2, f"{name} 누적 순매수 ({'올해 1/1' if inv_cum_from != '기간 시작일' else f'{inv_start:%Y-%m-%d}'}부터)", height=380)
+        apply_title_and_legend(fig2, f"{name} 누적 순매수 ({cum_label})", height=380)
         fig2.update_layout(hovermode="x unified", margin=dict(r=60))
         st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"inv_c_{code}")
 
         with st.expander(f"{name} 일별 표"):
-            t = d.join(cum.add_suffix(" 누적")).sort_index(ascending=False)
+            t = d[sel].join(cum[sel].add_suffix(" 누적")).sort_index(ascending=False)
             t.index = t.index.strftime("%Y-%m-%d")
-            st.dataframe(t.style.format("{:+,.0f}"), use_container_width=True)
-        if fails:
-            st.caption(f"⚠️ {fails}일 조회 실패 — 잠시 후 새로고침하면 다시 시도합니다.")
-        return last
+            st.dataframe(t.style.format("{:+,.0f}", na_rep="-"), use_container_width=True)
 
     lc, rc = st.columns(2)
     with lc:
         st.markdown("#### 코스피")
-        last_k = _inv_charts("코스피")
+        _inv_charts("코스피")
     with rc:
         st.markdown("#### 코스닥")
         _inv_charts("코스닥")
-    st.caption("출처: 네이버 증권(한국거래소 집계) · 단위 억원 · 기관 = 금융투자·보험·투신·사모·은행·연기금 등 합계, "
-               "기타법인(자사주 매입 등)은 미포함이라 세 주체 합이 0이 아님 · 회색선 = 지수 종가(우측 축) · 30분 캐시"
-               + (f" · 최신 {last_k:%Y-%m-%d}" if last_k is not None else ""))
+    st.caption(f"출처: {' / '.join(sorted(inv_src)) or '-'}(한국거래소 집계) · 단위 억원 · 장중에는 당일 값이 잠정치 · "
+               "기관 = 금융투자·보험·투신·사모·은행·연기금·기타금융 합계 · 외국인 = 등록 외국인(기타외국인 제외) · "
+               "회색선 = 지수 종가(우측 축) · 30분 캐시")
+
+    # --- 외국인 수급 vs 매크로 -------------------------------------------------
+    st.divider()
+    st.subheader("🌐 외국인 수급 vs 매크로 (미국채 금리 · 달러/원)")
+    m1, m2, m3 = st.columns([2, 2, 3])
+    mac_mkt = m1.radio("외국인 순매수", ["코스피", "코스닥", "합산"], horizontal=True, key="mac_mkt")
+    tenor = m2.radio("미국채 만기", ["10년", "2년"], horizontal=True, key="mac_tenor",
+                     help="10년 = 글로벌 할인율·위험자산 밸류에이션(기본). 2년 = 연준 정책금리 기대 → 달러 방향에 더 민감.")
+    flip = m3.checkbox("환율·금리 축 뒤집기 (위로 갈수록 원화 강세·금리 하락)", value=True, key="mac_flip")
+
+    parts = [inv_res[n][0]["외국인"] for n in (["코스피", "코스닥"] if mac_mkt == "합산" else [mac_mkt]) if n in inv_res]
+    if not parts:
+        st.warning("외국인 순매수 데이터가 없습니다.")
+    else:
+        f_day = pd.concat(parts, axis=1).fillna(0).sum(axis=1)
+        f_cum = f_day.cumsum()
+        jo = f_cum.abs().max() >= 1e5
+        f_y, f_unit = (f_cum / 1e4, "조원") if jo else (f_cum, "억원")
+        fx = get_usdkrw((inv_start - datetime.timedelta(days=10)).strftime("%Y-%m-%d"))
+        curve, curve_err = get_treasury_curve_data()
+        rate = curve[{"10년": "10Y", "2년": "2Y"}[tenor]] if not curve.empty else pd.Series(dtype=float)
+        lo = f_day.index.min()
+        fx, rate = fx[fx.index >= lo], rate[rate.index >= lo]
+
+        def _mac_fig(series, sname, color, yfmt, title):
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_scatter(x=f_y.index, y=f_y.values, name=f"외국인 누적({mac_mkt})", fill="tozeroy",
+                            line=dict(color=INV_COLORS["외국인"], width=2), fillcolor="rgba(230,57,70,0.12)",
+                            hovertemplate=("%{y:+,.2f}조" if jo else "%{y:+,.0f}억") + "<extra>외국인 누적</extra>", secondary_y=False)
+            fig.add_scatter(x=series.index, y=series.values, name=sname, line=dict(color=color, width=2),
+                            hovertemplate=yfmt + "<extra>" + sname + "</extra>", secondary_y=True)
+            fig.update_yaxes(title_text=f"외국인 누적 순매수({f_unit})", secondary_y=False, tickformat=",", zeroline=True, zerolinecolor="#888")
+            fig.update_yaxes(title_text=sname + (" (축 반전)" if flip else ""), secondary_y=True, showgrid=False,
+                             autorange="reversed" if flip else True)
+            apply_title_and_legend(fig, title, height=400)
+            fig.update_layout(hovermode="x unified")
+            return fig
+
+        g1, g2 = st.columns(2)
+        with g1:
+            if fx.empty:
+                st.warning("달러/원 환율을 받지 못했습니다 (yfinance KRW=X).")
+            else:
+                st.plotly_chart(_mac_fig(fx, "달러/원", "#264653", "%{y:,.1f}원", "외국인 누적 순매수 vs 달러/원"),
+                                use_container_width=True, config={"scrollZoom": False}, key="mac_fx")
+        with g2:
+            if rate.empty:
+                st.warning(f"미국채 금리를 받지 못했습니다. {curve_err or ''}")
+            else:
+                st.plotly_chart(_mac_fig(rate, f"미국채 {tenor}", "#e9c46a", "%{y:.2f}%", f"외국인 누적 순매수 vs 미국채 {tenor}"),
+                                use_container_width=True, config={"scrollZoom": False}, key="mac_rate")
+
+        # 주간 상관: 주간 외국인 순매수 합 ↔ 같은 주 환율·금리 변화 (수준끼리 비교하면 추세 때문에 가짜 상관이 생김)
+        wk_f = f_day.resample("W-FRI").sum()
+        wk = pd.DataFrame({"f": wk_f,
+                           "fx": fx.resample("W-FRI").last().diff() if not fx.empty else pd.Series(dtype=float),
+                           "rt": rate.resample("W-FRI").last().diff() * 100 if not rate.empty else pd.Series(dtype=float)})
+        wk = wk[wk.index.isin(wk_f.index)]
+        n = int(wk.dropna().shape[0])
+        if n < 8:
+            st.caption("기간이 짧아(8주 미만) 주간 상관계수는 생략합니다. 3개월 이상을 선택하세요.")
+        else:
+            def _stat(col):
+                x = wk[["f", col]].dropna()
+                c = x["f"].corr(x[col])
+                slope = x["f"].cov(x[col]) / x["f"].var() * 1e4    # 외국인 1조 순매수당 변화
+                return c, slope
+            c_fx, s_fx = _stat("fx")
+            c_rt, s_rt = _stat("rt")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("주간 상관: 외국인 순매수 ↔ 환율 변화", f"{c_fx:+.2f}", f"1조 순매수당 {s_fx:+.1f}원", delta_color="off")
+            k2.metric(f"주간 상관: 외국인 순매수 ↔ 미국채 {tenor} 변화", f"{c_rt:+.2f}", f"1조 순매수당 {s_rt:+.1f}bp", delta_color="off")
+            k3.metric(f"표본 ({wk.index.min():%Y-%m-%d}~)", f"{n}주")
+
+            def _word(c):
+                return "뚜렷한" if abs(c) >= 0.5 else "약한" if abs(c) >= 0.2 else "거의 없는"
+            st.info(
+                f"**환율** — 상관 {c_fx:+.2f}({_word(c_fx)} 관계). "
+                + ("외국인이 많이 산 주에 달러/원이 내리는(원화 강세) 전형적 패턴입니다." if c_fx <= -0.2 else
+                   "외국인이 산 주에 오히려 환율이 오르는 경향 — 수급보다 달러 강세 등 대외 요인이 컸던 구간입니다." if c_fx >= 0.2 else
+                   "이 기간엔 외국인 수급과 환율이 따로 움직였습니다.")
+                + f"\n\n**미국채 {tenor}** — 상관 {c_rt:+.2f}({_word(c_rt)} 관계). "
+                + ("금리가 내린 주에 외국인이 사는(위험선호) 관계가 보입니다." if c_rt <= -0.2 else
+                   "금리가 오른 주에 외국인이 사는 경향 — 성장 기대로 금리·주식이 함께 오른 구간일 수 있습니다." if c_rt >= 0.2 else
+                   "이 기간엔 외국인 수급과 미국 금리 변화의 연결이 약했습니다."))
+
+        with st.expander("📖 해석 가이드 — 왜 10년물? 금융투자 = ETF 수급?"):
+            st.markdown("""
+- **미국채 10년물이 기본인 이유**: 전 세계 위험자산의 할인율이자 신흥국 주식 밸류에이션의 기준이라, 외국인의 한국 주식 비중 조절과 가장 자주 함께 거론됩니다. **2년물**은 연준 정책금리 기대를 반영해 **달러 강·약세**와 더 직접 연결되므로, 환율 경로를 통한 영향을 보려면 2년물로 바꿔 비교해 보세요.
+- **달러/원**: 외국인 순매수 → 원화 매수(환율 하락)와, 원화 강세 기대 → 외국인 유입이 서로 원인이자 결과입니다. 축을 뒤집으면 두 선이 같은 방향일 때 '정상적인' 관계로 읽힙니다.
+- **상관계수는 주간 '변화'끼리** 계산합니다. 누적 순매수와 금리 '수준'을 바로 비교하면 둘 다 추세가 있어 의미 없는 높은 상관이 나오기 쉽습니다.
+- **금융투자 ≠ 순수 ETF 수급**: 금융투자는 증권사 계정으로, ETF 설정·환매 시 LP/AP가 바스켓을 사고파는 물량이 크게 잡혀 **ETF 수급의 대리지표**로 많이 씁니다. 다만 증권사 자기매매, 선물·현물 **차익거래**, 파생상품 헤지도 섞여 있어 그대로 ETF 자금 유입이라 단정하긴 어렵습니다. 개인의 ETF 매수는 개인이 아니라 금융투자 매수로 잡히는 경우가 많습니다.
+- **연기금**: 국민연금 등. 자산배분 리밸런싱(주가 급락 시 매수, 급등 시 매도)으로 역추세 성격이 강합니다.
+- **기타법인**: 일반 기업. 자사주 매입·소각이 늘면 크게 순매수로 잡힙니다(코스피 개인+외국인+기관 합이 0이 안 되는 주된 이유).
+            """)
