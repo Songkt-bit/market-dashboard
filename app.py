@@ -1519,7 +1519,7 @@ def auction_dealer_verdict(p):
 
 
 # ---------------------------------------------------------------------------
-# Page 16 — 코스피·코스닥 투자자별 일별 순매수 (Daum 금융 → 실패 시 네이버, 로그인 불필요)
+# Page 11 하위 탭(시장 수급) — 코스피·코스닥 투자자별 일별 순매수 (Daum 금융 → 실패 시 네이버, 로그인 불필요)
 # ---------------------------------------------------------------------------
 # KRX는 로그인이 필요해 포털 API를 씁니다. Daum은 500일씩 페이지로 주고 연기금·금융투자 등
 # 세부 주체까지 나옵니다(원 단위 → 억원 환산). Daum이 막히면 네이버(하루 1건, 개인·외국인·기관만)로 대체.
@@ -1604,15 +1604,128 @@ def get_usdkrw(start_date_str: str):
     return close.iloc[:, 0].dropna()
 
 
+def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.2f}"):
+    """투자자별 요약표 + 일별 순매수 막대 + 누적 꺾은선(가격은 우측 축) + 일별 표. d·cum 단위 억원."""
+    last = d.index.max()
+    summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
+    st.dataframe(summ.style.format(_eok).map(lambda v: f"color: {'#d62828' if v > 0 else '#1d4e89' if v < 0 else 'inherit'}"),
+                 use_container_width=True)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    for inv in sel:
+        fig.add_bar(x=d.index, y=d[inv], name=inv, marker_color=INV_COLORS[inv],
+                    hovertemplate="%{y:+,.0f}억<extra>" + inv + "</extra>", secondary_y=False)
+    fig.add_scatter(x=px_s.index, y=px_s.values, name=px_name, line=dict(color="#9aa3af", width=1.5),
+                    hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
+    fig.update_layout(barmode="group", bargap=0.15)
+    fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
+    fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+    apply_title_and_legend(fig, f"{title} 일별 순매수", height=380)
+    fig.update_layout(hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"flow_d_{key}")
+
+    jo = cum[sel].abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
+    cy, unit, hfmt = (cum / 1e4, "조원", "%{y:+,.2f}조") if jo else (cum, "억원", "%{y:+,.0f}억")
+    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+    for inv in sel:
+        fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, line=dict(color=INV_COLORS[inv], width=2.2),
+                         hovertemplate=hfmt + "<extra>" + inv + "</extra>", secondary_y=False)
+        fig2.add_annotation(x=cy.index[-1], y=cy[inv].iloc[-1], text=_eok(cum[inv].iloc[-1]),
+                            showarrow=False, xanchor="left", font=dict(color=INV_COLORS[inv], size=11))
+    fig2.add_scatter(x=px_s.index, y=px_s.values, name=px_name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
+                     hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
+    fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
+    fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+    apply_title_and_legend(fig2, f"{title} 누적 순매수 ({cum_label})", height=380)
+    fig2.update_layout(hovermode="x unified", margin=dict(r=60))
+    st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"flow_c_{key}")
+
+    with st.expander(f"{title} 일별 표"):
+        t = d[sel].join(cum[sel].add_suffix(" 누적")).sort_index(ascending=False)
+        t.index = t.index.strftime("%Y-%m-%d")
+        st.dataframe(t.style.format("{:+,.0f}", na_rep="-"), use_container_width=True)
+
+
+# --- 종목별 투자자 순매수 -----------------------------------------------------
+# 1순위 KRX(pykrx, 로그인 계정이 Secrets에 있을 때): 금액(원) 정확값 + 연기금·금융투자 세부.
+# 2순위 네이버: 개인·외국인·기관 순매수 '수량'만 줘서 수량 × 그날 종가로 금액을 근사합니다.
+#   한 번에 60일씩, bizdate=X 를 주면 X 이전 60일을 돌려줘서 날짜를 거슬러 올라가며 이어 받습니다.
+_STK_NAVER = {"individualPureBuyQuant": "개인", "foreignerPureBuyQuant": "외국인", "organPureBuyQuant": "기관"}
+_KRX_INST = ["금융투자", "보험", "투신", "사모", "은행", "기타금융", "연기금"]
+
+
+def _num(s):
+    s = str(s).replace(",", "").replace("+", "").replace("%", "").strip()
+    return float(s) if s not in ("", "-") else float("nan")
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def get_stock_name(code: str):
+    try:
+        r = requests.get(f"https://m.stock.naver.com/api/stock/{code}/basic", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        return r.json().get("stockName") or code
+    except Exception:
+        return code
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_stock_flows(code: str, start: str):
+    """(DataFrame[INV_ALL(억원) + 종가 + 외국인보유율(%)], 출처). 실패 시 빈 DataFrame."""
+    s = pd.Timestamp(start)
+    rows, cursor = [], None
+    for _ in range(60):                                    # 60일 × 60회 ≈ 14년이면 충분
+        params = {"pageSize": 60, **({"bizdate": cursor} if cursor else {})}
+        try:
+            r = requests.get(f"https://m.stock.naver.com/api/stock/{code}/trend", params=params,
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            page = r.json() if r.status_code == 200 else []
+        except Exception:
+            page = []
+        if not isinstance(page, list) or not page:
+            break
+        rows += page
+        cursor = page[-1]["bizdate"]
+        if pd.Timestamp(cursor) < s:
+            break
+    if not rows:
+        return pd.DataFrame(), "-"
+    nv = pd.DataFrame({"date": pd.to_datetime([x["bizdate"] for x in rows]),
+                       "종가": [_num(x.get("closePrice")) for x in rows],
+                       "외국인보유율": [_num(x.get("foreignerHoldRatio")) for x in rows],
+                       **{v: [_num(x.get(k)) for x in rows] for k, v in _STK_NAVER.items()}})
+    nv = nv.drop_duplicates("date").set_index("date").sort_index()
+    nv = nv[nv.index >= s]
+    out = pd.DataFrame(index=nv.index, columns=INV_ALL, dtype=float)
+    for c in _STK_NAVER.values():
+        out[c] = nv[c] * nv["종가"] / 1e8
+    src = "네이버 증권(순매수 수량 × 종가로 금액 근사, 개인·외국인·기관만)"
+
+    if PYKRX_AVAILABLE and KRX_LOGIN_CONFIGURED and not nv.empty:
+        try:
+            v = pykrx_stock.get_market_trading_value_by_date(nv.index.min().strftime("%Y%m%d"),
+                                                             nv.index.max().strftime("%Y%m%d"), code, detail=True)
+            if v is not None and not v.empty and "연기금" in v.columns:
+                v = v.astype(float) / 1e8
+                v.index = pd.to_datetime(v.index)
+                krx = pd.DataFrame({"개인": v["개인"], "외국인": v["외국인"], "기관": v[_KRX_INST].sum(axis=1),
+                                    "금융투자": v["금융투자"], "연기금": v["연기금"], "기타법인": v["기타법인"]})
+                out = krx.reindex(nv.index)[INV_ALL]
+                src = "KRX 정보데이터시스템(금액 정확값)"
+        except Exception:
+            pass
+    out["종가"], out["외국인보유율"] = nv["종가"], nv["외국인보유율"]
+    return out, src
+
+
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
     "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
-    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목 연도별 수익률",
+    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목·수급",
     "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오",
-    "🛡️ Page 15: 환헤지 타당성", "🧭 Page 16: 투자자별 순매수"
+    "🛡️ Page 15: 환헤지 타당성"
 ])
 
 # ==========================================
@@ -2931,7 +3044,9 @@ with tab10:
 # [Page 11] 종목 연도별 수익률 (YTD) 가로 막대
 # ==========================================
 with tab11:
-    col_ytd, col_ytd_spare = st.columns([1, 1])  # 오른쪽 절반은 추후 사용을 위해 비워 둠
+    sub_stock, sub_market = st.tabs(["🏆 종목 (연도별 수익률 · 투자자 수급)", "🧭 시장 수급 (코스피·코스닥)"])
+    with sub_stock:
+        col_ytd, col_ytd_spare = st.columns([1, 1])
     with col_ytd:
         st.subheader("종목 연도별 수익률 (YTD)")
         st.caption(
@@ -3037,6 +3152,49 @@ with tab11:
                          .map(lambda v: "" if pd.isna(v) else f"color: {UP_C if v >= 0 else DOWN_C}; font-weight: 600"),
                     use_container_width=True,
                 )
+
+    with col_ytd_spare:
+        st.subheader("종목 투자자별 순매수")
+        kr_codes = [t.strip() for t in raw_list if len(t.strip()) == 6 and t.strip()[0].isdigit()]
+        s1, s2 = st.columns([1, 3])
+        stk_code = s1.text_input("종목코드 (6자리)", value=kr_codes[0] if kr_codes else "005930", key="stk_code").strip().upper()
+        stk_per = s2.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="stk_per")
+        if len(stk_code) != 6:
+            st.info("한국 종목코드 6자리를 입력하세요. (예: 005930 삼성전자, 069500 KODEX 200)")
+        else:
+            s_today = datetime.date.today()
+            s_start = datetime.date(s_today.year, 1, 1) if INV_PERIODS[stk_per] is None else s_today - datetime.timedelta(days=INV_PERIODS[stk_per])
+            with st.spinner(f"{stk_code} 투자자별 매매동향 수집 중…"):
+                sdf, s_src = get_stock_flows(stk_code, s_start.strftime("%Y-%m-%d"))
+            if sdf.empty:
+                st.warning(f"'{stk_code}' 투자자별 매매동향을 찾지 못했습니다. 종목코드를 확인해주세요.")
+            else:
+                s_name = get_stock_name(stk_code)
+                avail = [c for c in INV_ALL if sdf[c].notna().any()]
+                stk_sel = st.multiselect("투자자", avail, default=[c for c in ["개인", "외국인", "기관", "금융투자", "연기금"] if c in avail],
+                                         key=f"stk_sel_{len(avail)}")
+                if not stk_sel:
+                    st.info("표시할 투자자를 선택해주세요.")
+                else:
+                    sd = sdf[INV_ALL]
+                    render_flow_charts(sd, sd.cumsum(), stk_sel, sdf["종가"], f"{s_name} 주가", key=f"stk_{stk_code}",
+                                       title=f"{s_name}({stk_code})", cum_label=f"{sd.index.min():%Y-%m-%d}부터", px_fmt="%{y:,.0f}원")
+
+                    hold = sdf["외국인보유율"].dropna()
+                    if not hold.empty:
+                        fig_h = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig_h.add_scatter(x=hold.index, y=hold.values, name="외국인 보유율", line=dict(color=INV_COLORS["외국인"], width=2.2),
+                                          hovertemplate="%{y:.2f}%<extra>외국인 보유율</extra>", secondary_y=False)
+                        fig_h.add_scatter(x=sdf.index, y=sdf["종가"], name=f"{s_name} 주가", line=dict(color="#9aa3af", width=1.5, dash="dot"),
+                                          hovertemplate="%{y:,.0f}원<extra>주가</extra>", secondary_y=True)
+                        fig_h.update_yaxes(title_text="외국인 보유율(%)", secondary_y=False, ticksuffix="%")
+                        fig_h.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+                        chg = hold.iloc[-1] - hold.iloc[0]
+                        apply_title_and_legend(fig_h, f"외국인 보유율 {hold.iloc[-1]:.2f}% (기간 {chg:+.2f}%p)", height=340)
+                        fig_h.update_layout(hovermode="x unified")
+                        st.plotly_chart(fig_h, use_container_width=True, config={"scrollZoom": False}, key=f"stk_h_{stk_code}")
+                st.caption(f"출처: {s_src} · 단위 억원 · 당일 값은 장 마감 후 반영 · 외국인 보유율은 누적 순매수보다 "
+                           "지분 변화를 직접 보여줘 장기 외국인 수급 판단에 유용합니다.")
 
 
 # ==========================================
@@ -3564,7 +3722,7 @@ with tab15:
 - 헤지를 하지 않으면 환율 변동 위험을 그대로 지므로 위 비교는 '헤지 시' 기준입니다. 韓 10Y는 네이버 금융(국고채 10년), 韓 기준금리는 ECOS(접속 가능할 때)에서 가져옵니다. 日 10Y는 일본 재무성, 美 10Y는 ^TNX(야후) 기준입니다.
         """)
 
-with tab16:
+with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 그 자리에 그려짐
     st.subheader("🧭 코스피·코스닥 투자자별 순매수")
     c1, c2 = st.columns([3, 2])
     inv_per = c1.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="inv_per")
@@ -3599,47 +3757,8 @@ with tab16:
         if not sel:
             st.info("표시할 투자자를 선택해주세요.")
             return
-        last = d.index.max()
-        summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
-        st.dataframe(summ.style.format(_eok).map(lambda v: f"color: {'#d62828' if v > 0 else '#1d4e89' if v < 0 else 'inherit'}"),
-                     use_container_width=True)
-
         px_s = get_single_index_close(ytk, (d.index.min() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
-        px_s = px_s[px_s.index >= d.index.min()]
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        for inv in sel:
-            fig.add_bar(x=d.index, y=d[inv], name=inv, marker_color=INV_COLORS[inv],
-                        hovertemplate="%{y:+,.0f}억<extra>" + inv + "</extra>", secondary_y=False)
-        fig.add_scatter(x=px_s.index, y=px_s.values, name=name, line=dict(color="#9aa3af", width=1.5),
-                        hovertemplate="%{y:,.2f}<extra>" + name + "</extra>", secondary_y=True)
-        fig.update_layout(barmode="group", bargap=0.15)
-        fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-        fig.update_yaxes(secondary_y=True, showgrid=False)
-        apply_title_and_legend(fig, f"{name} 일별 순매수", height=380)
-        fig.update_layout(hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"inv_d_{code}")
-
-        jo = cum[sel].abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
-        cy, unit, hfmt = (cum / 1e4, "조원", "%{y:+,.2f}조") if jo else (cum, "억원", "%{y:+,.0f}억")
-        fig2 = make_subplots(specs=[[{"secondary_y": True}]])
-        for inv in sel:
-            fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, line=dict(color=INV_COLORS[inv], width=2.2),
-                             hovertemplate=hfmt + "<extra>" + inv + "</extra>", secondary_y=False)
-            fig2.add_annotation(x=cy.index[-1], y=cy[inv].iloc[-1], text=_eok(cum[inv].iloc[-1]),
-                                showarrow=False, xanchor="left", font=dict(color=INV_COLORS[inv], size=11))
-        fig2.add_scatter(x=px_s.index, y=px_s.values, name=name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
-                         hovertemplate="%{y:,.2f}<extra>" + name + "</extra>", secondary_y=True)
-        fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-        fig2.update_yaxes(secondary_y=True, showgrid=False)
-        apply_title_and_legend(fig2, f"{name} 누적 순매수 ({cum_label})", height=380)
-        fig2.update_layout(hovermode="x unified", margin=dict(r=60))
-        st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"inv_c_{code}")
-
-        with st.expander(f"{name} 일별 표"):
-            t = d[sel].join(cum[sel].add_suffix(" 누적")).sort_index(ascending=False)
-            t.index = t.index.strftime("%Y-%m-%d")
-            st.dataframe(t.style.format("{:+,.0f}", na_rep="-"), use_container_width=True)
+        render_flow_charts(d, cum, sel, px_s[px_s.index >= d.index.min()], name, key=code, title=name, cum_label=cum_label)
 
     lc, rc = st.columns(2)
     with lc:
