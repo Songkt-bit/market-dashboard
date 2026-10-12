@@ -1604,7 +1604,7 @@ def get_usdkrw(start_date_str: str):
     return close.iloc[:, 0].dropna()
 
 
-def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.2f}"):
+def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.0f}"):
     """투자자별 요약표 + 일별 순매수 막대 + 누적 꺾은선(가격은 우측 축) + 일별 표. d·cum 단위 억원."""
     last = d.index.max()
     summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
@@ -1619,7 +1619,7 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
                     hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
     fig.update_layout(barmode="group", bargap=0.15)
     fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-    fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+    fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
     apply_title_and_legend(fig, f"{title} 일별 순매수", height=380)
     fig.update_layout(hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"flow_d_{key}")
@@ -1635,7 +1635,7 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
     fig2.add_scatter(x=px_s.index, y=px_s.values, name=px_name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
                      hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
     fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-    fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+    fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
     apply_title_and_legend(fig2, f"{title} 누적 순매수 ({cum_label})", height=380)
     fig2.update_layout(hovermode="x unified", margin=dict(r=60))
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"flow_c_{key}")
@@ -3188,7 +3188,7 @@ with tab11:
                         fig_h.add_scatter(x=sdf.index, y=sdf["종가"], name=f"{s_name} 주가", line=dict(color="#9aa3af", width=1.5, dash="dot"),
                                           hovertemplate="%{y:,.0f}원<extra>주가</extra>", secondary_y=True)
                         fig_h.update_yaxes(title_text="외국인 보유율(%)", secondary_y=False, ticksuffix="%")
-                        fig_h.update_yaxes(secondary_y=True, showgrid=False, tickformat=",")
+                        fig_h.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
                         chg = hold.iloc[-1] - hold.iloc[0]
                         apply_title_and_legend(fig_h, f"외국인 보유율 {hold.iloc[-1]:.2f}% (기간 {chg:+.2f}%p)", height=340)
                         fig_h.update_layout(hovermode="x unified")
