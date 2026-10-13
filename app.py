@@ -513,6 +513,43 @@ def get_treasury_curve_data():
     return df.rename(columns={"2 Yr": "2Y", "10 Yr": "10Y"}), None
 
 
+# ---------------------------------------------------------------------------
+# Page 4 — 헤지펀드의 미국 10년물 국채 선물 순포지션 (CFTC COT, 주간)
+# ---------------------------------------------------------------------------
+# CFTC 'Traders in Financial Futures(선물 전용)' 보고서의 Leveraged Funds(=헤지펀드)
+# 순포지션(롱-숏). 공개 Socrata API로 무료 조회, 2006-06부터 매주 화요일 기준.
+# 10년물 T-Note 계약 코드는 043602. '시장 대비'는 순포지션 / 전체 미결제약정.
+CFTC_TFF_URL = "https://publicreporting.cftc.gov/resource/gpe5-46if.json"
+
+
+@st.cache_data(ttl=43200, show_spinner="CFTC 헤지펀드 포지션을 불러오는 중입니다...")
+def get_cftc_10y_lev_funds():
+    """반환: (DataFrame[net, oi, pct], error). net은 계약 수, pct는 미결제약정 대비 %."""
+    params = {
+        "$select": "report_date_as_yyyy_mm_dd,open_interest_all,lev_money_positions_long,lev_money_positions_short",
+        "$where": "cftc_contract_market_code='043602'",
+        "$order": "report_date_as_yyyy_mm_dd",
+        "$limit": 5000,
+    }
+    try:
+        res = requests.get(CFTC_TFF_URL, params=params, timeout=30)
+        res.raise_for_status()
+        df = pd.DataFrame(res.json())
+    except Exception as e:
+        return pd.DataFrame(), f"{type(e).__name__}: {e}"
+    if df.empty:
+        return df, "CFTC 응답이 비어 있습니다."
+    df["Date"] = pd.to_datetime(df["report_date_as_yyyy_mm_dd"])
+    num = df[["open_interest_all", "lev_money_positions_long", "lev_money_positions_short"]].astype(float)
+    out = pd.DataFrame({
+        "net": num["lev_money_positions_long"] - num["lev_money_positions_short"],
+        "oi": num["open_interest_all"],
+    })
+    out.index = df["Date"]
+    out["pct"] = out["net"] / out["oi"] * 100
+    return out.sort_index(), None
+
+
 @st.cache_data(ttl=3600)
 def get_dram_csv_data():
     csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRyxRDpITzRJmbQ1XPnJHazHIq0IIr1DpeetgocahZipL64gDJYM_0H3JjFNv91C21t17TdCG9H-AHd/pub?gid=746668639&single=true&output=csv"
@@ -2189,6 +2226,67 @@ with tab4:
         fig_spread.update_yaxes(title_text="스프레드 (%p)")
         fig_spread.update_xaxes(title_text="연도")
         st.plotly_chart(fig_spread, use_container_width=True, config={'scrollZoom': False})
+
+    # 헤지펀드의 미국 10년물 국채 선물 순포지션 (CFTC COT, Leveraged Funds)
+    df_cot, cot_err = get_cftc_10y_lev_funds()
+    if df_cot.empty:
+        st.warning(f"CFTC 헤지펀드 포지션을 불러오지 못했습니다 — {cot_err}")
+    else:
+        net_m = df_cot["net"] / 1e6  # 백만 계약
+        COT_RED = "#9b1c1c"
+        fig_cot = go.Figure()
+        # 0 아래 구간만 음영: 양수는 0으로 잘라낸 보조 시계열을 tozeroy로 채움
+        fig_cot.add_trace(go.Scatter(
+            x=net_m.index, y=net_m.clip(upper=0), mode="lines", line=dict(width=0),
+            fill="tozeroy", fillcolor="rgba(200,60,60,0.25)", hoverinfo="skip", showlegend=False,
+        ))
+        fig_cot.add_trace(go.Scatter(
+            x=net_m.index, y=net_m.values, name="순포지션", line=dict(color=COT_RED, width=1.6),
+            customdata=df_cot["pct"].values,
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:.2f}백만 계약<br>시장 대비 %{customdata:.0f}%<extra></extra>",
+            showlegend=False,
+        ))
+        fig_cot.add_hline(y=0, line_color="rgba(128,128,128,0.8)", line_width=1)
+        fig_cot.add_hline(y=-1, line_dash="dash", line_color="rgba(128,128,128,0.7)", line_width=1)
+        fig_cot.add_annotation(x=net_m.index[0], y=-1, xanchor="left", yanchor="bottom", showarrow=False,
+                               text="순매도 100만 계약 — 2023년 이전에는 거의 넘지 않던 수준",
+                               font=dict(size=11, color="gray"))
+
+        def _cot_label(d, title, ax, ay):
+            fig_cot.add_annotation(
+                x=d, y=net_m[d], ax=ax, ay=ay, showarrow=True, arrowcolor=COT_RED, arrowwidth=1,
+                text=f"<b>{title}</b><br>{-df_cot.at[d, 'net'] / 1e4:,.0f}만 계약 순매도<br>"
+                     f"시장 대비 {df_cot.at[d, 'pct']:.0f}%<br>{d.year}년 {d.month}월 {d.day}일",
+                align="left", font=dict(size=11, color=COT_RED),
+                bgcolor="rgba(255,255,255,0.85)", bordercolor=COT_RED, borderwidth=1,
+            )
+
+        # 주요 국면의 저점은 데이터에서 직접 찾음(주간 데이터가 갱신돼도 자동으로 맞춰짐)
+        for title, s, e, ax, ay in [("금융위기 이후 저점", "2008-01-01", "2010-12-31", 0, -70),
+                                    ("2022년 채권 매도세", "2022-01-01", "2022-12-31", 70, -60)]:
+            win = net_m[s:e]
+            if not win.empty and win.min() < 0:
+                _cot_label(win.idxmin(), title, ax, ay)
+        _cot_label(net_m.idxmin(), "역대 최대", -60, 60)
+        if net_m.index[-1] != net_m.idxmin():
+            _cot_label(net_m.index[-1], "최신치", -90, -70)
+
+        latest_d = net_m.index[-1]
+        apply_title_and_legend(
+            fig_cot,
+            f"<b>헤지펀드의 미국 10년물 국채 선물 순포지션</b> "
+            f"(최신 {latest_d:%Y-%m-%d}: {net_m.iloc[-1]:+.2f}백만 계약, 시장 대비 {df_cot['pct'].iloc[-1]:.0f}%)",
+            height=520,
+        )
+        fig_cot.update_yaxes(title_text="순매도 ← 계약 수(백만 계약) → 순매수", zeroline=False)
+        fig_cot.update_xaxes(title_text="연도")
+        st.plotly_chart(fig_cot, use_container_width=True, config={'scrollZoom': False})
+        st.caption(
+            "출처: CFTC Commitments of Traders — Traders in Financial Futures(선물 전용), "
+            "UST 10Y Note(CBOT, 코드 043602)의 **Leveraged Funds**(헤지펀드) 롱 − 숏. "
+            "'시장 대비'는 순포지션 ÷ 전체 미결제약정. 매주 화요일 기준, 금요일 공표(2006-06~현재). "
+            "헤지펀드의 대규모 순매도는 상당 부분 현물 국채 매수와 짝을 이루는 베이시스 트레이드로 해석됩니다."
+        )
 
 # ==========================================
 # [Page 5] 반도체(D램) 가격 추이
