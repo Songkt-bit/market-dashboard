@@ -1680,9 +1680,22 @@ def get_usdkrw(start_date_str: str):
     return close.iloc[:, 0].dropna()
 
 
+def flow_xrange(idx):
+    """수급 차트들의 공통 x축 범위 — 막대 여백·누적선 끝 라벨 공간을 같게 둬서 위아래 차트 날짜가 맞도록."""
+    span = idx.max() - idx.min()
+    return [idx.min() - pd.Timedelta(days=1), idx.max() + max(pd.Timedelta(days=2), span * 0.08)]
+
+
+def flow_align(fig, xr):
+    """x축 범위 + 좌우 여백 고정 — 축 숫자 길이가 달라도 위아래 차트의 그림 영역이 정확히 겹치게."""
+    fig.update_yaxes(automargin=False)
+    fig.update_layout(xaxis_range=xr, margin_l=90, margin_r=80, hovermode="x unified")
+
+
 def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.0f}"):
     """투자자별 요약표 + 일별 순매수 막대 + 누적 꺾은선(가격은 우측 축) + 일별 표. d·cum 단위 억원."""
     last = d.index.max()
+    xr = flow_xrange(d.index)
     summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
     st.dataframe(summ.style.format(_eok).map(lambda v: f"color: {'#d62828' if v > 0 else '#1d4e89' if v < 0 else 'inherit'}"),
                  use_container_width=True)
@@ -1697,23 +1710,25 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
     fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
     fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
     apply_title_and_legend(fig, f"{title} 일별 순매수", height=380)
-    fig.update_layout(hovermode="x unified")
+    flow_align(fig, xr)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"flow_d_{key}")
 
     jo = cum[sel].abs().values.max() >= 1e5   # 누적 10조 넘으면 조 단위 축
     cy, unit, hfmt = (cum / 1e4, "조원", "%{y:+,.2f}조") if jo else (cum, "억원", "%{y:+,.0f}억")
     fig2 = make_subplots(specs=[[{"secondary_y": True}]])
     for inv in sel:
-        fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, line=dict(color=INV_COLORS[inv], width=2.2),
+        fig2.add_scatter(x=cy.index, y=cy[inv], name=inv, legendgroup=inv, line=dict(color=INV_COLORS[inv], width=2.2),
                          hovertemplate=hfmt + "<extra>" + inv + "</extra>", secondary_y=False)
-        fig2.add_annotation(x=cy.index[-1], y=cy[inv].iloc[-1], text=_eok(cum[inv].iloc[-1]),
-                            showarrow=False, xanchor="left", font=dict(color=INV_COLORS[inv], size=11))
+        # 끝값 라벨은 annotation이 아니라 같은 legendgroup의 텍스트 트레이스 — 범례로 선을 끄면 라벨도 함께 사라짐
+        fig2.add_scatter(x=[cy.index[-1]], y=[cy[inv].iloc[-1]], text=[" " + _eok(cum[inv].iloc[-1])], mode="text",
+                         textposition="middle right", textfont=dict(color=INV_COLORS[inv], size=11),
+                         legendgroup=inv, showlegend=False, hoverinfo="skip", secondary_y=False)
     fig2.add_scatter(x=px_s.index, y=px_s.values, name=px_name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
                      hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
     fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
     fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
     apply_title_and_legend(fig2, f"{title} 누적 순매수 ({cum_label})", height=380)
-    fig2.update_layout(hovermode="x unified", margin=dict(r=60))
+    flow_align(fig2, xr)
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"flow_c_{key}")
 
     with st.expander(f"{title} 일별 표"):
@@ -3412,7 +3427,7 @@ with tab11:
                         fig_h.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
                         chg = hold.iloc[-1] - hold.iloc[0]
                         apply_title_and_legend(fig_h, f"외국인 보유율 {hold.iloc[-1]:.2f}% (기간 {chg:+.2f}%p)", height=340)
-                        fig_h.update_layout(hovermode="x unified")
+                        flow_align(fig_h, flow_xrange(sdf.index))
                         st.plotly_chart(fig_h, use_container_width=True, config={"scrollZoom": False}, key=f"stk_h_{stk_code}")
                 st.caption(f"출처: {s_src} · 단위 억원 · 당일 값은 장 마감 후 반영 · 외국인 보유율은 누적 순매수보다 "
                            "지분 변화를 직접 보여줘 장기 외국인 수급 판단에 유용합니다.")
