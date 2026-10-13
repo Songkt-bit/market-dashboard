@@ -314,6 +314,45 @@ def get_market_data(start_date_str):
     return data
 
 
+USD_INDICES = {"코스피": "^KS11", "코스닥": "^KQ11"}
+
+
+@st.cache_data(ttl=3600)
+def get_usd_index_data(start_date_str):
+    """코스피·코스닥을 원/달러 환율(KRW=X)로 나눠 달러 기준으로 환산(= 외국인이 보는 지수).
+    시작일을 100으로 맞춘 원화·달러 지수와 각각의 낙폭(DD)을 돌려줍니다.
+    반환: ({이름: DataFrame[KRW, USD, FX, DD_KRW, DD_USD]}, 오류 메시지)"""
+    try:
+        fx_raw = yf.download("KRW=X", start=start_date_str, progress=False)
+    except Exception as e:
+        return {}, f"환율 조회 실패: {type(e).__name__}: {e}"
+    if fx_raw is None or fx_raw.empty:
+        return {}, "원/달러 환율(KRW=X)을 불러오지 못했습니다."
+    fx = fx_raw["Close"]
+    fx = (fx.iloc[:, 0] if isinstance(fx, pd.DataFrame) else fx).dropna()
+    out = {}
+    for name, ticker in USD_INDICES.items():
+        raw = yf.download(ticker, start=start_date_str, progress=False)
+        if raw is None or raw.empty:
+            continue
+        px = raw["Close"]
+        px = (px.iloc[:, 0] if isinstance(px, pd.DataFrame) else px).dropna()
+        # 한국 휴장일과 환율 거래일이 다를 수 있어 지수 거래일 기준으로 직전 환율을 가져온다
+        fx_aligned = fx.reindex(px.index, method="ffill").dropna()
+        px = px.loc[fx_aligned.index]
+        if len(px) < 2:
+            continue
+        krw = px / px.iloc[0] * 100
+        usd_raw = px / fx_aligned
+        usd = usd_raw / usd_raw.iloc[0] * 100
+        out[name] = pd.DataFrame({
+            "KRW": krw, "USD": usd, "FX": fx_aligned,
+            "DD_KRW": (krw / krw.cummax() - 1) * 100,
+            "DD_USD": (usd / usd.cummax() - 1) * 100,
+        })
+    return out, ("" if out else "지수 데이터를 불러오지 못했습니다.")
+
+
 # ---------------------------------------------------------------------------
 # Page 1 부가 기능 — 지수별 하락 빈도(몇 년에 한 번씩 -X% 낙폭이 오는지)
 # ---------------------------------------------------------------------------
@@ -1876,6 +1915,70 @@ with tab1:
                 # MDD 축: 항상 0% ~ -100% 고정
                 apply_dd_axis(fig)
                 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': False})
+
+    with st.expander("💵 코스피·코스닥 달러 기준 (외국인이 보는 지수)", expanded=True):
+        st.caption(
+            "달러 환산 지수 = 지수 ÷ 원/달러 환율(야후 KRW=X). 원화로는 크게 빠져도 원화가 약해졌다면 "
+            "달러로 본 낙폭은 더 작아집니다 — 외국인 입장의 체감 수익률에 가까운 근사치입니다(배당·환헤지 제외). "
+            "두 선 모두 조회 시작일을 100으로 맞춰 비교하며, 오른쪽 MDD 축은 0% ~ -100%로 고정입니다."
+        )
+        period_usd = st.radio("조회 기간을 선택하세요:", ["1년", "3년", "5년", "10년", "20년", "Max", "YTD"],
+                              index=2, horizontal=True, key="m_p1_usd")
+        usd_data, usd_err = get_usd_index_data(get_start_date(period_usd).strftime("%Y-%m-%d"))
+        if usd_err:
+            st.warning(usd_err)
+        else:
+            USD_UP, USD_DOWN = "#e03131", "#1c7ed6"
+
+            def _pct_html(v):
+                c = USD_UP if v > 0 else USD_DOWN if v < 0 else "#868e96"
+                return f'<span style="color:{c};font-weight:700;">{v:+.1f}%</span>'
+
+            rows_html = ""
+            for name, d in usd_data.items():
+                ret_k, ret_u = d["KRW"].iloc[-1] - 100, d["USD"].iloc[-1] - 100
+                fx_chg = (d["FX"].iloc[-1] / d["FX"].iloc[0] - 1) * 100
+                rows_html += (
+                    f'<tr><td style="padding:6px 10px;font-weight:600;">{name}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;">{_pct_html(ret_k)}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;">{_pct_html(ret_u)}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;">{_pct_html(fx_chg)}</td>'
+                    f'<td style="padding:6px 10px;text-align:right;">{d["DD_KRW"].iloc[-1]:+.1f}% / {d["DD_USD"].iloc[-1]:+.1f}%</td>'
+                    f'<td style="padding:6px 10px;text-align:right;">{d["DD_KRW"].min():+.1f}% / {d["DD_USD"].min():+.1f}%</td></tr>'
+                )
+            st.markdown(
+                '<table style="width:100%;border-collapse:collapse;font-size:14px;"><thead>'
+                '<tr style="border-bottom:1px solid rgba(128,128,128,.4);">'
+                '<th style="padding:6px 10px;text-align:left;">지수</th>'
+                '<th style="padding:6px 10px;text-align:right;">원화 수익률</th>'
+                '<th style="padding:6px 10px;text-align:right;">달러 수익률</th>'
+                '<th style="padding:6px 10px;text-align:right;">원/달러 변화</th>'
+                '<th style="padding:6px 10px;text-align:right;">현재 낙폭 (원화 / 달러)</th>'
+                '<th style="padding:6px 10px;text-align:right;">기간 최대낙폭 (원화 / 달러)</th>'
+                f'</tr></thead><tbody>{rows_html}</tbody></table>', unsafe_allow_html=True)
+
+            cols_usd = st.columns(2)
+            for col, (name, d) in zip(cols_usd, usd_data.items()):
+                with col:
+                    fig_u = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig_u.add_trace(go.Scatter(x=d.index, y=d["KRW"], name="원화 지수", line=dict(color="#94a3b8", width=1.5)),
+                                    secondary_y=False)
+                    fig_u.add_trace(go.Scatter(x=d.index, y=d["USD"], name="달러 환산 지수", line=dict(color="#e8590c", width=2.2)),
+                                    secondary_y=False)
+                    fig_u.add_trace(go.Scatter(x=d.index, y=d["DD_KRW"], name="MDD 원화", line=dict(color="rgba(148,163,184,.9)", width=1, dash="dot")),
+                                    secondary_y=True)
+                    fig_u.add_trace(go.Scatter(x=d.index, y=d["DD_USD"], name="MDD 달러", line=dict(color="gray", width=1)),
+                                    secondary_y=True)
+                    apply_title_and_legend(
+                        fig_u,
+                        f"<b>{name}</b> 원화 {d['KRW'].iloc[-1]:.0f} · 달러 {d['USD'].iloc[-1]:.0f} (시작=100) | "
+                        f"DD 원화 {d['DD_KRW'].iloc[-1]:+.1f}% / 달러 {d['DD_USD'].iloc[-1]:+.1f}%",
+                        height=380, title_size=13,
+                    )
+                    fig_u.update_yaxes(title_text="지수 (시작=100)",
+                                       range=price_axis_range(pd.concat([d["KRW"], d["USD"]])), secondary_y=False)
+                    apply_dd_axis(fig_u)
+                    st.plotly_chart(fig_u, use_container_width=True, config={'scrollZoom': False})
 
     with st.expander("📉 지수별 하락 빈도 (S&P 500 · 코스피)", expanded=False):
         st.caption(
