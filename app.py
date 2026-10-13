@@ -3027,6 +3027,26 @@ with tab9:
                 col_k2.metric("선택 구간 평균", f"{vkospi.mean():.1f}")
                 col_k3.metric("선택 구간 최고", f"{vkospi.max():.1f}")
 
+                # VKOSPI = 향후 30일 코스피200 변동성을 연율화한 내재변동성(%). 일일 1σ ≈ VKOSPI / √252.
+                # 정규분포 가정이라 1σ = 약 68%, 2σ = 약 95% 확률로 그 안에 머문다는 뜻입니다.
+                day_1s = latest_vk / math.sqrt(252)
+                day_1s_avg = float(vkospi.mean()) / math.sqrt(252)
+                col_e1, col_e2, col_e3 = st.columns(3)
+                col_e1.metric("일일 예상 변동폭 (1σ · 약 68%)", f"±{day_1s:.2f}%",
+                              f"구간 평균 대비 {day_1s - day_1s_avg:+.2f}%p", delta_color="off")
+                col_e2.metric("일일 예상 변동폭 (2σ · 약 95%)", f"±{2 * day_1s:.2f}%")
+                if not kospi9.empty:
+                    kospi_last = float(kospi9.iloc[-1])
+                    col_e3.metric(
+                        f"코스피 {kospi_last:,.0f} 기준 1σ 범위",
+                        f"{kospi_last * (1 - day_1s / 100):,.0f} ~ {kospi_last * (1 + day_1s / 100):,.0f}",
+                        f"±{kospi_last * day_1s / 100:,.0f}pt", delta_color="off",
+                    )
+                st.caption(
+                    "일일 예상 변동폭 = 현재 VKOSPI ÷ √252 (VKOSPI는 향후 30일 변동성을 연율화한 값). "
+                    "정규분포를 가정한 통계적 범위일 뿐 방향은 알려주지 않으며, 실제 시장은 극단값이 더 자주 나옵니다."
+                )
+
                 avg_gap = ((vkospi.index[-1] - vkospi.index[0]).days / max(len(vkospi) - 1, 1))
                 clamp_note = (
                     f" (VKOSPI는 {VKOSPI_DATA_START.strftime('%Y-%m-%d')}부터 제공되어 그 이전은 조회되지 않습니다)"
