@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -67,6 +68,68 @@ except Exception as e:
 # 1. 웹페이지 기본 설정
 st.set_page_config(page_title="잡동사니 모음집", layout="wide")
 st.title("잡동사니 모음집")
+
+# 모든 Plotly 차트에 📋 복사 / 💾 저장 버튼 (마우스를 올리면 나오는 우상단 도구막대 맨 앞에 표시)
+# components.html은 같은 출처의 iframe이라 부모 문서에 <script>를 심어 부모 쪽에서 실행되게 합니다
+# (iframe 안에서 만든 함수는 Streamlit 재실행으로 iframe이 바뀌면 끊길 수 있음).
+# 이미지는 Plotly.toImage(2배 해상도) → 앱 배경색 위에 합성해 투명 배경이 카톡 등에서 검게 보이지 않게 함.
+_CAPTURE_JS = r"""
+(() => {
+  if (window.__chartCapture) return; window.__chartCapture = true;
+  const css = document.createElement('style');
+  css.textContent = `
+    .modebar-group.cap-bar{display:inline-flex;gap:3px;padding-right:6px!important}
+    .cap-bar button{font:11px sans-serif;padding:1px 6px;border:1px solid rgba(128,128,128,.4);border-radius:5px;
+      background:var(--cap-bg,#fff);color:#555;cursor:pointer;line-height:18px}
+    .cap-bar button:hover{filter:brightness(.93)}
+    .cap-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#222;color:#fff;
+      padding:8px 14px;border-radius:8px;font:13px sans-serif;z-index:99999}`;
+  document.head.appendChild(css);
+  const toast = (m) => { const t = document.createElement('div'); t.className = 'cap-toast'; t.textContent = m;
+    document.body.appendChild(t); setTimeout(() => t.remove(), 2500); };
+  const bg = () => getComputedStyle(document.querySelector('.stApp') || document.body).backgroundColor || '#fff';
+  const name = (gd) => ((gd._fullLayout.title && gd._fullLayout.title.text) || 'chart')
+      .replace(/<[^>]+>/g, '').replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'chart';
+  async function shot(gd) {
+    const L = gd._fullLayout, s = 2;
+    const url = await Plotly.toImage(gd, {format: 'png', scale: s, width: L.width, height: L.height});
+    const img = new Image(); img.src = url; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const x = c.getContext('2d'); x.fillStyle = bg(); x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0);
+    return new Promise(r => c.toBlob(r, 'image/png'));
+  }
+  async function copy(gd) {   // 클릭 직후 동기적으로 write를 호출해야 권한 유지 → 이미지는 Promise로 넘김
+    try { await navigator.clipboard.write([new ClipboardItem({'image/png': shot(gd)})]);
+          toast('차트 이미지가 복사됐습니다 — 붙여넣기(Ctrl+V)'); }
+    catch (e) { toast('복사 실패 — 💾 저장을 이용하세요 (' + e.name + ')'); }
+  }
+  async function save(gd) {
+    const b = await shot(gd), a = document.createElement('a'), d = new Date();
+    a.href = URL.createObjectURL(b);
+    a.download = `${name(gd)}_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.png`;
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function add() {   // 도구막대는 Plotly가 다시 그리면 사라지므로 DOM 변화마다 없는 곳에만 다시 붙임
+    document.querySelectorAll('.js-plotly-plot .modebar').forEach(mb => {
+      if (mb.querySelector('.cap-bar')) return;
+      const gd = mb.closest('.js-plotly-plot');
+      gd.style.setProperty('--cap-bg', bg());
+      const bar = document.createElement('div'); bar.className = 'modebar-group cap-bar';
+      [['📋 복사', copy], ['💾 저장', save]].forEach(([t, f]) => {
+        const b = document.createElement('button'); b.textContent = t; b.title = '차트 캡처';
+        b.onclick = (e) => { e.stopPropagation(); f(gd); }; bar.appendChild(b); });
+      mb.prepend(bar);
+    });
+  }
+  new MutationObserver(add).observe(document.body, {childList: true, subtree: true}); add();
+})();
+"""
+components.html(
+    "<script>const d = window.parent.document; if (!d.getElementById('chart-capture')) {"
+    " const s = d.createElement('script'); s.id = 'chart-capture'; s.textContent = " + json.dumps(_CAPTURE_JS) + ";"
+    " d.head.appendChild(s); }</script>",
+    height=0,
+)
 
 # 탭이 12개(+Page 8 내부 2개)로 늘어나면서 한 줄에 다 안 들어가 가로 스크롤이 생기는
 # 문제를 CSS로 줄바꿈(wrap) 처리해 해결. 스크롤 대신 탭이 2~3줄로 나뉘어 표시됨.
@@ -3431,6 +3494,50 @@ with tab11:
                         st.plotly_chart(fig_h, use_container_width=True, config={"scrollZoom": False}, key=f"stk_h_{stk_code}")
                 st.caption(f"출처: {s_src} · 단위 억원 · 당일 값은 장 마감 후 반영 · 외국인 보유율은 누적 순매수보다 "
                            "지분 변화를 직접 보여줘 장기 외국인 수급 판단에 유용합니다.")
+
+    # --- 특정 연도 종목별 수익률 비교 (세로 막대) -------------------------------
+    with sub_stock:
+        st.divider()
+        st.subheader("연도별 종목 수익률 비교")
+        cy_now = datetime.date.today().year
+        c_y, c_t = st.columns([1, 5])
+        cmp_year = c_y.selectbox("연도", list(range(cy_now, 1999, -1)), key="cmp_year")
+        cmp_text = c_t.text_input("티커 (쉼표로 구분, 최대 20개 · 한국은 6자리 코드)",
+                                  value="005930, 000660, 214450, 214150, AAPL, NVDA", key="cmp_tickers")
+        cmp_list = list(dict.fromkeys(t.strip() for t in cmp_text.replace("，", ",").split(",") if t.strip()))[:20]
+        if cmp_list:
+            with st.spinner("종목별 수익률 계산 중…"), ThreadPoolExecutor(max_workers=8) as ex:
+                got = list(ex.map(get_yearly_returns, cmp_list))
+            rows, miss = [], []
+            for raw, (dfy, sym, name) in zip(cmp_list, got):
+                r = None if dfy is None else dfy[dfy["year"] == cmp_year]
+                if r is None or r.empty:
+                    miss.append(raw if dfy is None else f"{raw}({cmp_year}년 시세 없음)")
+                    continue
+                code = raw.strip().upper()
+                if len(code) == 6 and code[0].isdigit():
+                    name = get_stock_name(code)      # 야후 영문 약칭 대신 한글 종목명
+                rows.append({"label": f"{name}<br>({sym})", "ret": float(r["ret"].iloc[0]), "partial": bool(r["partial"].iloc[0])})
+            if rows:
+                cdf = pd.DataFrame(rows).sort_values("ret", ascending=False)
+                fig_cmp = go.Figure(go.Bar(
+                    x=cdf["label"], y=cdf["ret"],
+                    marker_color=["#e03131" if v >= 0 else "#1c7ed6" for v in cdf["ret"]],
+                    text=[f"<b>{v:+.1f}%</b>" + ("*" if p else "") for v, p in zip(cdf["ret"], cdf["partial"])],
+                    textposition="outside", cliponaxis=False, textfont=dict(size=13),
+                    hovertemplate="%{x}: %{y:+.1f}%<extra></extra>"))
+                fig_cmp.update_yaxes(title_text="수익률 (%)", ticksuffix="%", zeroline=True, zerolinecolor="rgba(128,128,128,.6)")
+                fig_cmp.update_xaxes(tickfont=dict(size=12))
+                period = f"{cmp_year} YTD (~{datetime.date.today():%m/%d})" if cmp_year == cy_now else f"{cmp_year}년"
+                apply_title_and_legend(fig_cmp, f"종목별 수익률 · {period}", height=460)
+                fig_cmp.update_layout(showlegend=False, margin=dict(t=70))
+                st.plotly_chart(fig_cmp, use_container_width=True, config={"scrollZoom": False}, key="cmp_bar")
+                notes = ["전년 말 종가 대비, 배당·분할 반영 종가 기준"]
+                if cdf["partial"].any():
+                    notes.append("* 그해 상장(데이터 시작) 종목은 상장 이후 구간 수익률")
+                st.caption(" · ".join(notes))
+            if miss:
+                st.warning("제외: " + ", ".join(miss))
 
 
 # ==========================================
