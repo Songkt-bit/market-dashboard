@@ -1,3 +1,4 @@
 putcall/kospi_cache.csv
 .streamlit/secrets.toml
 __pycache__/
+fss_foreign/txt/

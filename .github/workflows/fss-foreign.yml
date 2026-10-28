@@ -1,0 +1,26 @@
+name: update-fss-foreign
+on:
+  schedule:
+    - cron: "30 8 * * *"      # 매일 08:30 UTC(한국 17:30) — 금감원 보도자료가 올라오는 오후 이후
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: data-commit          # putcall 워크플로와 동시에 푸시하지 않도록 직렬화
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install requests beautifulsoup4 pdfplumber
+      - name: 신규 월 수집·파싱 (검증 실패 시 이 단계에서 워크플로 실패)
+        run: python fss_foreign/gha_update.py
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fss_foreign/parsed.json
+          git diff --cached --quiet || (git commit -m "fss_foreign: 신규 월 반영" && git pull --rebase && git push)

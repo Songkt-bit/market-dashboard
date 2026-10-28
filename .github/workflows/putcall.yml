@@ -8,6 +8,9 @@ on:
         description: "KOSPI200 종목명/합산 형식만 확인(putcall/probe_out.txt 로 커밋)"
         type: boolean
         default: false
+concurrency:
+  group: data-commit
+  cancel-in-progress: false
 permissions:
   contents: write
 jobs:
