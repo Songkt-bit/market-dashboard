@@ -1755,8 +1755,9 @@ def flow_align(fig, xr):
     fig.update_layout(xaxis_range=xr, margin_l=90, margin_r=80, hovermode="x unified")
 
 
-def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.0f}"):
+def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt="%{y:,.0f}", px_log=False):
     """투자자별 요약표 + 일별 순매수 막대 + 누적 꺾은선(가격은 우측 축) + 일별 표. d·cum 단위 억원."""
+    px_type = "log" if px_log else "linear"
     last = d.index.max()
     xr = flow_xrange(d.index)
     summ = pd.DataFrame({f"누적 ({cum_label})": cum[sel].iloc[-1], f"{last:%m/%d}": d[sel].iloc[-1]}).T
@@ -1771,7 +1772,7 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
                     hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
     fig.update_layout(barmode="group", bargap=0.15)
     fig.update_yaxes(title_text="일별 순매수(억원)", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-    fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
+    fig.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f", type=px_type)
     apply_title_and_legend(fig, f"{title} 일별 순매수", height=380)
     flow_align(fig, xr)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"flow_d_{key}")
@@ -1789,7 +1790,7 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
     fig2.add_scatter(x=px_s.index, y=px_s.values, name=px_name, line=dict(color="#9aa3af", width=1.5, dash="dot"),
                      hovertemplate=px_fmt + "<extra>" + px_name + "</extra>", secondary_y=True)
     fig2.update_yaxes(title_text=f"누적 순매수({unit})", secondary_y=False, zeroline=True, zerolinecolor="#888", tickformat=",")
-    fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f")
+    fig2.update_yaxes(secondary_y=True, showgrid=False, tickformat=",.0f", type=px_type)
     apply_title_and_legend(fig2, f"{title} 누적 순매수 ({cum_label})", height=380)
     flow_align(fig2, xr)
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": False}, key=f"flow_c_{key}")
@@ -1798,6 +1799,83 @@ def render_flow_charts(d, cum, sel, px_s, px_name, key, title, cum_label, px_fmt
         t = d[sel].join(cum[sel].add_suffix(" 누적")).sort_index(ascending=False)
         t.index = t.index.strftime("%Y-%m-%d")
         st.dataframe(t.style.format("{:+,.0f}", na_rep="-"), use_container_width=True)
+
+
+# --- 지수 기술적 차트 (캔들 + 이동평균 + 매물대 + RSI) -------------------------
+TECH_MAS = {5: "#f4a261", 20: "#e63946", 60: "#2a9d8f", 120: "#8e6cc7", 200: "#1d4e89"}
+TECH_WARMUP_DAYS = 300   # 200일선·RSI 워밍업용으로 기간 시작보다 앞서 받는 달력일
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_index_ohlcv(ticker: str, start_date_str: str):
+    df = yf.download(ticker, start=start_date_str, progress=False)
+    if df.empty:
+        return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+
+
+def rsi_wilder(close, n=14):
+    delta = close.diff()
+    up = delta.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    dn = (-delta.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    return 100 - 100 / (1 + up / dn)
+
+
+def volume_profile(df, bins=40, log=False):
+    """(가격구간 중앙값, 구간별 거래량). 하루 거래량을 그날 대표가 (H+L+C)/3 구간에 전부 배정."""
+    # ponytail: 일봉 근사 — 하루 거래량을 고가~저가에 나눠 싣지 않음. 분봉 데이터가 생기면 교체.
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3
+    lo, hi = df["Low"].min(), df["High"].max()
+    edges = (pd.Series(range(bins + 1)) / bins)
+    edges = (lo * (hi / lo) ** edges) if log else (lo + (hi - lo) * edges)   # 로그축이면 로그 등간격 구간
+    cut = pd.cut(tp, edges.values, include_lowest=True)
+    vol = df["Volume"].groupby(cut, observed=False).sum()
+    mids = [(iv.left * iv.right) ** 0.5 if log else (iv.left + iv.right) / 2 for iv in vol.index]
+    return mids, vol.values
+
+
+def render_index_tech(ohlc, start, name, key, mas, log, show_vp, show_rsi):
+    """캔들 + 이동평균(좌) · 매물대 가로막대(우, 같은 가격축) · RSI(아래). ohlc는 워밍업 포함, start 이후만 그림."""
+    full = ohlc.copy()
+    for n in mas:
+        full[f"MA{n}"] = full["Close"].rolling(n).mean()
+    full["RSI"] = rsi_wilder(full["Close"])
+    df = full[full.index >= pd.Timestamp(start)]
+    if df.empty:
+        st.warning(f"{name} 지수 데이터가 없습니다.")
+        return
+    rows = 2 if show_rsi else 1
+    fig = make_subplots(rows=rows, cols=2, shared_yaxes=True, shared_xaxes=True,
+                        column_widths=[0.82, 0.18] if show_vp else [1, 0.0001], horizontal_spacing=0.01,
+                        row_heights=[0.75, 0.25] if show_rsi else [1], vertical_spacing=0.04,
+                        specs=[[{}, {}]] + ([[{}, None]] if show_rsi else []))
+    fig.add_candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name=name,
+                        increasing_line_color="#d62828", decreasing_line_color="#1d4e89", row=1, col=1)
+    for n in mas:
+        fig.add_scatter(x=df.index, y=df[f"MA{n}"], name=f"{n}일선", line=dict(color=TECH_MAS[n], width=1.3),
+                        hovertemplate="%{y:,.2f}<extra>" + f"{n}일선</extra>", row=1, col=1)
+    if show_vp:
+        mids, vol = volume_profile(df, log=log)
+        poc = mids[int(vol.argmax())]
+        fig.add_bar(x=vol, y=mids, orientation="h", name="매물대", marker_color="rgba(154,163,175,.55)",
+                    hovertemplate="%{y:,.0f} 부근<extra>매물대</extra>", showlegend=False, row=1, col=2)
+        fig.add_hline(y=poc, line=dict(color="#9aa3af", dash="dash", width=1), row=1, col="all",
+                      annotation_text=f"최대 매물대 {poc:,.0f}", annotation_position="top left", annotation_font_size=10)
+        fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
+    fig.update_yaxes(type="log" if log else "linear", tickformat=",.0f", row=1, col=1)
+    if show_rsi:
+        fig.add_scatter(x=df.index, y=df["RSI"], name="RSI(14)", line=dict(color="#8e6cc7", width=1.3),
+                        hovertemplate="%{y:.1f}<extra>RSI</extra>", showlegend=False, row=2, col=1)
+        for lvl, c in ((70, "#d62828"), (30, "#1d4e89")):
+            fig.add_hline(y=lvl, line=dict(color=c, dash="dot", width=1), row=2, col=1)
+        fig.update_yaxes(range=[0, 100], tickvals=[30, 50, 70], title_text=f"RSI {df['RSI'].iloc[-1]:.0f}", row=2, col=1)
+    fig.update_xaxes(rangeslider_visible=False, rangebreaks=[dict(bounds=["sat", "mon"])], row=1, col=1)
+    apply_title_and_legend(fig, f"{name} {df['Close'].iloc[-1]:,.2f} ({'로그' if log else '선형'}축)",
+                           height=560 if show_rsi else 440)
+    fig.update_layout(hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"tech_{key}")
 
 
 # --- 종목별 투자자 순매수 -----------------------------------------------------
@@ -4067,7 +4145,7 @@ with tab15:
 
 with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 그 자리에 그려짐
     st.subheader("🧭 코스피·코스닥 투자자별 순매수")
-    c1, c2 = st.columns([3, 2])
+    c1, c2, c3 = st.columns([3, 2, 1.4])
     inv_per = c1.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="inv_per")
     inv_cum_from = c2.radio("누적 기준", ["기간 시작일", "올해 1월 1일"], horizontal=True, key="inv_cum",
                             help="누적 순매수를 어디서부터 더할지. '올해 1월 1일'은 기간이 YTD보다 짧을 때만 의미가 있습니다.")
@@ -4075,6 +4153,8 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
                              help="금융투자·연기금은 '기관'에 포함된 세부 항목입니다.")
     today = datetime.date.today()
     inv_start = datetime.date(today.year, 1, 1) if INV_PERIODS[inv_per] is None else today - datetime.timedelta(days=INV_PERIODS[inv_per])
+    inv_log = c3.radio("지수 축", ["선형", "로그"], horizontal=True, key="inv_log",
+                       help="로그축은 같은 높이 = 같은 등락률. 3년·5년처럼 지수 수준이 크게 바뀐 기간에 유용합니다.") == "로그"
     cum_base = datetime.date(today.year, 1, 1) if inv_cum_from == "올해 1월 1일" and inv_start > datetime.date(today.year, 1, 1) else inv_start
     cum_label = f"{cum_base:%Y-%m-%d}부터"
     inv_res, inv_src = {}, set()
@@ -4101,7 +4181,8 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
             st.info("표시할 투자자를 선택해주세요.")
             return
         px_s = get_single_index_close(ytk, (d.index.min() - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
-        render_flow_charts(d, cum, sel, px_s[px_s.index >= d.index.min()], name, key=code, title=name, cum_label=cum_label)
+        render_flow_charts(d, cum, sel, px_s[px_s.index >= d.index.min()], name, key=code, title=name, cum_label=cum_label,
+                           px_log=inv_log)
 
     lc, rc = st.columns(2)
     with lc:
@@ -4118,6 +4199,27 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
     st.divider()
     st.subheader("🌐 외국인 수급 vs 매크로 (미국채 금리 · 달러/원)")
     m1, m2, m3 = st.columns([2, 2, 3])
+    # --- 지수 기술적 차트 -------------------------------------------------------
+    st.divider()
+    st.subheader("📐 지수 차트 — 이동평균 · 매물대 · RSI")
+    t1, t2, t3 = st.columns([3, 1, 1])
+    tech_mas = t1.multiselect("이동평균선", list(TECH_MAS), default=[20, 60, 120], format_func=lambda n: f"{n}일",
+                              key="tech_mas")
+    tech_vp = t2.checkbox("매물대", value=True, key="tech_vp",
+                          help="선택 기간의 거래량을 가격대별로 합산한 가로막대. 점선 = 거래가 가장 많이 쌓인 가격(POC).")
+    tech_rsi = t3.checkbox("RSI(14)", value=True, key="tech_rsi", help="70 이상 과매수 · 30 이하 과매도 (Wilder 방식)")
+    tl, tr = st.columns(2)
+    for col, name in ((tl, "코스피"), (tr, "코스닥")):
+        code, ytk = INV_MARKETS[name]
+        with col:
+            ohlc = get_index_ohlcv(ytk, (inv_start - datetime.timedelta(days=TECH_WARMUP_DAYS)).strftime("%Y-%m-%d"))
+            if ohlc.empty:
+                st.warning(f"{name} 지수 데이터를 받지 못했습니다.")
+            else:
+                render_index_tech(ohlc, inv_start, name, code, sorted(tech_mas), inv_log, tech_vp, tech_rsi)
+    st.caption("기간·지수 축은 위 수급 차트와 같은 선택을 씁니다 · 출처 Yahoo Finance(^KS11·^KQ11) · "
+               "매물대는 일봉 근사(하루 거래량을 (고가+저가+종가)/3 가격대에 배정) · 이평선·RSI는 기간 이전 데이터로 미리 계산")
+
     mac_mkt = m1.radio("외국인 순매수", ["코스피", "코스닥", "합산"], horizontal=True, key="mac_mkt")
     tenor = m2.radio("미국채 만기", ["10년", "2년"], horizontal=True, key="mac_tenor",
                      help="10년 = 글로벌 할인율·위험자산 밸류에이션(기본). 2년 = 연준 정책금리 기대 → 달러 방향에 더 민감.")
