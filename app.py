@@ -4022,15 +4022,21 @@ FREESIS_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
 FREESIS_TABLES = {
     "STATSCU0100000060BO": {"TMPV2": "예탁금", "TMPV5": "미수금", "TMPV6": "반대매매", "TMPV7": "반대매매비중"},
     "STATSCU0100000070BO": {"TMPV2": "신용_전체", "TMPV3": "신용_코스피", "TMPV4": "신용_코스닥"},
+    "STATSCU0100000020BO": {"TMPV5": "시총_코스피"},   # 유가증권시장 동향(지수·거래대금·시가총액)
+    "STATSCU0100000030BO": {"TMPV5": "시총_코스닥"},
 }
-CREDIT_MARKETS = {"코스피": ("신용_코스피", "^KS11"), "코스닥": ("신용_코스닥", "^KQ11")}
+CREDIT_MARKETS = {"코스피": ("신용_코스피", "시총_코스피", "^KS11"), "코스닥": ("신용_코스닥", "시총_코스닥", "^KQ11")}
+CREDIT_DROP_WIN = 20       # 신용 감소율 계산 창(거래일)
+MARGIN_SPIKE_X = 2.5       # 반대매매가 직전 250일 중앙값의 몇 배 이상이면 '급증' (2008·2011·2015·2018·2020 등 포착)
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_credit_deposit():
-    """일자 인덱스 DataFrame — 금액 열은 조원, 반대매매는 억원, 반대매매비중 %. 0은 미집계로 보고 NaN."""
+def get_credit_deposit(tables=tuple(FREESIS_TABLES)):
+    """일자 인덱스 DataFrame — 금액 열은 조원, 반대매매는 억원, 반대매매비중 %. 0은 미집계로 보고 NaN.
+    tables 인자는 캐시 키용 — FREESIS_TABLES에 표를 추가하면 옛 캐시 대신 새로 받음."""
     parts = []
-    for obj, cols in FREESIS_TABLES.items():
+    for obj in tables:
+        cols = FREESIS_TABLES[obj]
         body = {"dmSearch": {"tmpV40": "1000000", "tmpV41": "1", "tmpV1": "D", "tmpV45": "19990101",
                              "tmpV46": datetime.date.today().strftime("%Y%m%d"), "OBJ_NM": obj}}
         r = requests.post(FREESIS_URL, json=body, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
@@ -4053,14 +4059,17 @@ def pct_rank(s):
 
 with sub_credit:   # Page 9 리스크 관리 > 예탁금·신용잔고
     st.subheader("💳 지수 vs 투자자예탁금 · 신용융자 잔고")
-    st.caption("신용융자 잔고가 지수보다 먼저 꺾이거나, 지수 하락 중 신용이 급감(반대매매 급증)하면 레버리지 청산 = 상대적 저점 신호로 "
-               "보는 경우가 많습니다. 반대로 지수 횡보 중 신용만 쌓이면 과열·하방 리스크. 신용÷예탁금 비율은 '대기 자금 대비 빚투' 수준입니다.")
-    k1, k2, k3 = st.columns([3, 1, 2])
+    st.caption("신용 잔고 '수준'은 주가×레버리지라 지수와 같이 움직이는 동행지표입니다. 그래서 두 가지로 걸러 봅니다. "
+               "① 신용÷시가총액 = 지수 효과를 뺀 순수 레버리지 수준(높을수록 같은 충격에 낙폭이 커짐 → 리스크 크기 판단). "
+               "② 신용 20일 급감 + 반대매매 급증 = 강제청산(투매) 국면 → 매도 압력 소진 확인(예측이 아니라 동시·후행 확인 신호).")
+    k1, k2, k3, k4 = st.columns([3, 1, 2, 1.3])
     cr_per = k1.radio("기간", ["1년", "3년", "5년", "10년", "20년", "Max"], index=2, horizontal=True, key="cr_per")
     cr_log = k2.radio("지수 축", ["선형", "로그"], horizontal=True, key="cr_log") == "로그"
     cr_show = k3.multiselect("보조축(조원)", ["신용융자", "예탁금"], default=["신용융자", "예탁금"], key="cr_show")
+    cr_th = k4.number_input(f"청산 신호: 신용 {CREDIT_DROP_WIN}일 변화율 ≤ (%)", -50.0, -1.0, -15.0, 1.0, key="cr_th",
+                            help="-15%는 1999년 이후 2008·2011·2015·2018·2020·2022 같은 큰 하락 국면만 잡는 수준. -10%로 낮추면 더 자주 뜹니다.")
     try:
-        cd_all = get_credit_deposit()
+        cd_all = get_credit_deposit(tuple(FREESIS_TABLES))
     except Exception as e:
         st.error(f"금융투자협회 FreeSIS 조회 실패: {e}")
         cd_all = None
@@ -4068,62 +4077,88 @@ with sub_credit:   # Page 9 리스크 관리 > 예탁금·신용잔고
         cr_start = pd.Timestamp(get_start_date(cr_per))
         cd = cd_all[cd_all.index >= cr_start]
         st.caption(f"최근 집계일 {cd_all.index.max():%Y-%m-%d} (FreeSIS는 보통 1~2영업일 늦게 반영)")
-        for mkt, (ccol, ytk) in CREDIT_MARKETS.items():
+        for mkt, (ccol, capcol, ytk) in CREDIT_MARKETS.items():
             px_s = get_single_index_close(ytk, (cr_start - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
             px_s = px_s[px_s.index >= cr_start]
-            m = pd.DataFrame({"지수": px_s, "신용융자": cd[ccol], "예탁금": cd["예탁금"]}).dropna(subset=["신용융자"])
+            # 20일 변화율은 기간 시작 전 데이터로 미리 계산해야 첫 20일이 비지 않음
+            drop_all = cd_all[ccol].dropna().pct_change(CREDIT_DROP_WIN, fill_method=None) * 100
+            m = pd.DataFrame({"지수": px_s, "신용융자": cd[ccol], "예탁금": cd["예탁금"], "시총": cd[capcol]}).dropna(subset=["신용융자"])
             m["지수"] = m["지수"].ffill()
             m["신용/예탁금"] = m["신용융자"] / m["예탁금"] * 100
+            m["신용/시총"] = m["신용융자"] / m["시총"] * 100
+            m["신용 20일"] = drop_all.reindex(m.index)
             m = m.dropna(subset=["지수"])
             if m.empty:
                 st.warning(f"{mkt}: 선택한 기간에 데이터가 없습니다.")
                 continue
+            sig = m[m["신용 20일"] <= cr_th]
             st.markdown(f"#### {mkt}")
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.72, 0.28], vertical_spacing=0.05,
-                                specs=[[{"secondary_y": True}], [{}]])
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.56, 0.22, 0.22], vertical_spacing=0.04,
+                                specs=[[{"secondary_y": True}], [{}], [{}]])
             fig.add_scatter(x=m.index, y=m["지수"], name=mkt, line=dict(color="#374151", width=1.6),
                             hovertemplate="%{y:,.2f}<extra>" + mkt + "</extra>", row=1, col=1)
             for name, color in (("신용융자", "#e63946"), ("예탁금", "#2a9d8f")):
                 if name in cr_show:
                     fig.add_scatter(x=m.index, y=m[name], name=f"{name}(조원, 우)", line=dict(color=color, width=1.4),
                                     hovertemplate="%{y:,.2f}조<extra>" + name + "</extra>", secondary_y=True, row=1, col=1)
-            r = m["신용/예탁금"]
-            fig.add_scatter(x=m.index, y=r, name="신용/예탁금(%)", line=dict(color="#8e6cc7", width=1.3), showlegend=False,
-                            hovertemplate="%{y:.1f}%<extra>신용/예탁금</extra>", row=2, col=1)
-            for q, dash in ((0.9, "dot"), (0.1, "dot")):   # 기간 상·하위 10% 선 — 과열/바닥권 눈금
-                fig.add_hline(y=r.quantile(q), line=dict(color="#9aa3af", dash=dash, width=1), row=2, col=1,
-                              annotation_text=f"{'상위' if q > 0.5 else '하위'} 10% {r.quantile(q):.1f}%",
+            fig.add_scatter(x=sig.index, y=sig["지수"], mode="markers", name=f"청산 신호(신용 {CREDIT_DROP_WIN}일 ≤ {cr_th:.0f}%)",
+                            marker=dict(color="#d62828", size=6, symbol="triangle-up"),
+                            hovertemplate="%{y:,.2f}<extra>청산 신호</extra>", row=1, col=1)
+            r = m["신용/시총"]
+            fig.add_scatter(x=m.index, y=r, name="신용/시총(%)", line=dict(color="#8e6cc7", width=1.3), showlegend=False,
+                            hovertemplate="%{y:.2f}%<extra>신용/시총</extra>", row=2, col=1)
+            for q in (0.9, 0.1):   # 기간 상·하위 10% 선 — 레버리지 과열/바닥권 눈금
+                fig.add_hline(y=r.quantile(q), line=dict(color="#9aa3af", dash="dot", width=1), row=2, col=1,
+                              annotation_text=f"{'상위' if q > 0.5 else '하위'} 10% {r.quantile(q):.2f}%",
                               annotation_position="top left", annotation_font_size=10)
+            dch = m["신용 20일"]
+            fig.add_bar(x=m.index, y=dch, name=f"신용 {CREDIT_DROP_WIN}일 변화율", showlegend=False,
+                        marker_color=["#d62828" if v <= cr_th else "#c9ced6" for v in dch.fillna(0)],
+                        hovertemplate="%{y:+.1f}%<extra>신용 " + f"{CREDIT_DROP_WIN}일</extra>", row=3, col=1)
+            fig.add_hline(y=cr_th, line=dict(color="#d62828", dash="dot", width=1), row=3, col=1)
             fig.update_yaxes(type="log" if cr_log else "linear", tickformat=",.0f", title_text=mkt, row=1, col=1, secondary_y=False)
             fig.update_yaxes(showgrid=False, tickformat=",.0f", title_text="조원", row=1, col=1, secondary_y=True)
-            fig.update_yaxes(title_text="신용/예탁금 %", row=2, col=1)
+            fig.update_yaxes(title_text="신용/시총 %", row=2, col=1)
+            fig.update_yaxes(title_text=f"신용 {CREDIT_DROP_WIN}일 %", row=3, col=1)
             apply_title_and_legend(fig, f"{mkt} {m['지수'].iloc[-1]:,.2f} · 신용 {m['신용융자'].iloc[-1]:,.2f}조 · "
-                                        f"예탁금 {m['예탁금'].iloc[-1]:,.1f}조 ({'로그' if cr_log else '선형'}축)", height=560)
-            fig.update_layout(hovermode="x unified")
+                                        f"신용/시총 {r.iloc[-1]:.2f}% · {CREDIT_DROP_WIN}일 {dch.iloc[-1]:+.1f}% "
+                                        f"({'로그' if cr_log else '선형'}축)", height=680)
+            fig.update_layout(hovermode="x unified", bargap=0)
+            fig.update_xaxes(range=[m.index.min(), m.index.max() + pd.Timedelta(days=3)])   # 막대 폭 때문에 축이 다음 해로 늘어나는 것 방지
             st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"credit_{mkt}")
 
-            chg = m.pct_change(20)   # 20거래일 변화율 상관 — 수준 상관은 둘 다 우상향이면 높게 나와 착시가 큼
+            rows = ("신용융자", "예탁금", "신용/예탁금", "신용/시총")
+            chg = m[["지수", *rows]].pct_change(20, fill_method=None)   # 20거래일 변화율 상관 — 수준 상관은 둘 다 우상향이면 착시가 큼
             st.dataframe(pd.DataFrame({
-                "현재": [m[c].iloc[-1] for c in ("신용융자", "예탁금", "신용/예탁금")],
-                "기간 최저": [m[c].min() for c in ("신용융자", "예탁금", "신용/예탁금")],
-                "기간 최고": [m[c].max() for c in ("신용융자", "예탁금", "신용/예탁금")],
-                "기간 내 위치(%)": [pct_rank(m[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
-                "지수와 상관(수준)": [m["지수"].corr(m[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
-                "지수와 상관(20일 변화율)": [chg["지수"].corr(chg[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
-            }, index=["신용융자(조원)", "예탁금(조원)", "신용/예탁금(%)"]).style.format("{:,.2f}"), use_container_width=True)
+                "현재": [m[c].iloc[-1] for c in rows],
+                "기간 최저": [m[c].min() for c in rows],
+                "기간 최고": [m[c].max() for c in rows],
+                "기간 내 위치(%)": [pct_rank(m[c]) for c in rows],
+                "지수와 상관(수준)": [m["지수"].corr(m[c]) for c in rows],
+                "지수와 상관(20일 변화율)": [chg["지수"].corr(chg[c]) for c in rows],
+            }, index=["신용융자(조원)", "예탁금(조원)", "신용/예탁금(%)", "신용/시총(%)"]).style.format("{:,.2f}"),
+                use_container_width=True)
+            if not sig.empty:
+                st.caption(f"기간 중 청산 신호 {len(sig)}일 · 최근 {sig.index[-1]:%Y-%m-%d}")
 
         st.markdown("#### 반대매매 · 위탁매매 미수금 (코스피+코스닥 합산)")
+        med = cd_all["반대매매"].rolling(250, min_periods=60).median().reindex(cd.index)   # 기간 전 데이터로 기준선 계산
+        spike = cd["반대매매"] >= med * MARGIN_SPIKE_X
         fig_r = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_r.add_bar(x=cd.index, y=cd["반대매매"], name="반대매매(억원)", marker_color="#e63946",
+        fig_r.add_bar(x=cd.index, y=cd["반대매매"], name=f"반대매매(억원, 진한색 = 250일 중앙값 ×{MARGIN_SPIKE_X} 이상 급증)",
+                      marker_color=["#d62828" if s else "#f1a7ad" for s in spike],
                       hovertemplate="%{y:,.0f}억<extra>반대매매</extra>")
+        fig_r.add_scatter(x=cd.index, y=med * MARGIN_SPIKE_X, name="급증 기준선", line=dict(color="#d62828", width=1, dash="dot"),
+                          hovertemplate="%{y:,.0f}억<extra>급증 기준</extra>")
         fig_r.add_scatter(x=cd.index, y=cd["반대매매비중"], name="미수금 대비 반대매매 비중(%, 우)",
                           line=dict(color="#374151", width=1.2), hovertemplate="%{y:.1f}%<extra>비중</extra>", secondary_y=True)
         fig_r.update_yaxes(title_text="억원", tickformat=",", secondary_y=False)
         fig_r.update_yaxes(title_text="%", showgrid=False, secondary_y=True)
-        apply_title_and_legend(fig_r, f"반대매매 {cd['반대매매'].iloc[-1]:,.0f}억 · 비중 {cd['반대매매비중'].iloc[-1]:.1f}%", height=360)
+        apply_title_and_legend(fig_r, f"반대매매 {cd['반대매매'].iloc[-1]:,.0f}억 · 비중 {cd['반대매매비중'].iloc[-1]:.1f}% · "
+                                      f"기간 중 급증 {int(spike.sum())}일", height=360)
         fig_r.update_layout(hovermode="x unified")
         st.plotly_chart(fig_r, use_container_width=True, config={"scrollZoom": False}, key="credit_margin_call")
-        st.caption("출처: 금융투자협회 FreeSIS(증시자금추이·신용공여잔고) · 지수는 Yahoo Finance · 예탁금은 시장 구분 없는 전체 값이라 "
+        st.caption("출처: 금융투자협회 FreeSIS(증시자금추이·신용공여잔고·유가증권/코스닥시장 동향의 시가총액) · 지수는 Yahoo Finance · 예탁금은 시장 구분 없는 전체 값이라 "
                    "신용/예탁금 비율은 '해당 시장 신용융자 ÷ 전체 예탁금' · 기간 내 위치 = 기간 중 현재값보다 낮았던 날의 비율 · 6시간 캐시")
 
 
