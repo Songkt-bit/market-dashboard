@@ -1950,15 +1950,20 @@ def get_stock_flows(code: str, start: str):
 
 
 # 4. 탭 화면 구성
-tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab11, tab12, tab13, tab15, tab16 = st.tabs([
     "🏠 Home", "📈 Page 1: 주가지수", "💱 Page 2: 환율 & 원자재",
     "Page 3: 상관관계", "Page 4: 미국 국채", "📊 Page 5: 반도체(D램)",
     "📉 Page 6: 삼성전자 괴리율", "🚢 Page 7: 한국 수출데이터",
-    "🏦 Page 8: ECOS 매크로 지표", "😨 Page 9: 공포탐욕지수",
-    "📶 Page 10: 이평선 상회 비율", "🏆 Page 11: 종목·수급",
-    "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자", "⚖️ Page 14: 풋콜 레이티오",
+    "🏦 Page 8: ECOS 매크로 지표", "⚠️ Page 9: 리스크 관리", "🏆 Page 11: 종목·수급",
+    "🏛️ Page 12: 미국 국채 입찰", "🌏 Page 13: 외국인 증권투자",
     "🛡️ Page 15: 환헤지 타당성", "📰 Page 16: 뉴스 검색"
 ])
+
+# Page 9 리스크 관리 = 공포탐욕지수 · 이평선 상회 비율 · 풋콜 레이티오 · 예탁금·신용잔고.
+# 각 화면 코드는 원래 자리(아래 [Page 9]/[Page 10]/[Page 14])에 그대로 두고 하위 탭 컨테이너에 그립니다.
+with tab9:
+    sub_fng, sub_breadth, sub_pc, sub_credit = st.tabs(["😨 공포탐욕지수", "📶 이평선 상회 비율", "⚖️ 풋콜 레이티오",
+                                                        "💳 예탁금·신용잔고"])
 
 # ==========================================
 # [Home] 시장 요약 & 코스피 계절성 히트맵
@@ -3039,9 +3044,9 @@ with tab8:
                             st.dataframe(df_series[["TIME", "DATA_VALUE"]], use_container_width=True, hide_index=True)
 
 # ==========================================
-# [Page 9] CNN Fear & Greed Index
+# [Page 9 리스크 관리 > 공포탐욕지수] CNN Fear & Greed Index
 # ==========================================
-with tab9:
+with sub_fng:      # Page 9 리스크 관리 > 공포탐욕지수
     st.subheader("😨 CNN Fear & Greed Index")
     st.caption(
         "CNN이 7개 하위 지표(시장 모멘텀, 변동성(VIX), 풋/콜 옵션 비율, 정크본드 수요, "
@@ -3317,9 +3322,9 @@ with tab9:
                     st.code("\n".join(vkospi_all_names), language=None)
 
 # ==========================================
-# [Page 10] 50일 이동평균선 상회 종목 비율 (Market Breadth)
+# [Page 9 리스크 관리 > 이평선 상회 비율] 50일 이동평균선 상회 종목 비율 (Market Breadth)
 # ==========================================
-with tab10:
+with sub_breadth:  # Page 9 리스크 관리 > 이평선 상회 비율
     st.subheader("📶 50일 이동평균선 상회 종목 비율 — 시장 호흡(Breadth) 지표")
     st.caption(
         "전체 종목 중 종가가 50일 이동평균선 위에 있는 종목의 비율(%)입니다. 통상 30% 아래로 "
@@ -3811,7 +3816,7 @@ with tab13:
 
 
 # ==========================================
-# [Page 14] 풋콜 레이티오 (S&P500 / 나스닥)
+# [Page 9 리스크 관리 > 풋콜 레이티오] 풋콜 레이티오 (S&P500 / 나스닥)
 # 데이터: putcall/data.csv — OCC(옵션청산공사) 일별 거래량, putcall/fetch.py가 매 영업일 갱신
 # ==========================================
 PC_MARKETS = {
@@ -3909,7 +3914,7 @@ def get_kospi_pc(pc_all):
     return use.set_index("date"), ""
 
 
-with tab14:
+with sub_pc:       # Page 9 리스크 관리 > 풋콜 레이티오
     st.subheader("풋콜 레이티오 (Put/Call Ratio)")
     if not os.path.exists(_PC_CSV):
         st.warning("putcall/data.csv 가 없습니다. `python putcall/fetch.py` 로 먼저 데이터를 받아주세요.")
@@ -4007,6 +4012,119 @@ with tab14:
                              .style.format({"풋 거래량": "{:,.0f}", "콜 거래량": "{:,.0f}", "풋/콜": "{:.2f}",
                                             "5일 평균": "{:.2f}", "20일 평균": "{:.2f}"}, na_rep="-"),
                              use_container_width=True, hide_index=True)
+
+
+# ==========================================
+# [Page 9 리스크 관리 > 예탁금·신용잔고] 금융투자협회 FreeSIS 증시자금추이·신용공여잔고 (1999~, 일별, 로그인 불필요)
+# ==========================================
+FREESIS_URL = "https://freesis.kofia.or.kr/meta/getMetaDataList.do"
+# OBJ_NM → {응답 열: 이름}. 단위 백만원(비중만 %).
+FREESIS_TABLES = {
+    "STATSCU0100000060BO": {"TMPV2": "예탁금", "TMPV5": "미수금", "TMPV6": "반대매매", "TMPV7": "반대매매비중"},
+    "STATSCU0100000070BO": {"TMPV2": "신용_전체", "TMPV3": "신용_코스피", "TMPV4": "신용_코스닥"},
+}
+CREDIT_MARKETS = {"코스피": ("신용_코스피", "^KS11"), "코스닥": ("신용_코스닥", "^KQ11")}
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def get_credit_deposit():
+    """일자 인덱스 DataFrame — 금액 열은 조원, 반대매매는 억원, 반대매매비중 %. 0은 미집계로 보고 NaN."""
+    parts = []
+    for obj, cols in FREESIS_TABLES.items():
+        body = {"dmSearch": {"tmpV40": "1000000", "tmpV41": "1", "tmpV1": "D", "tmpV45": "19990101",
+                             "tmpV46": datetime.date.today().strftime("%Y%m%d"), "OBJ_NM": obj}}
+        r = requests.post(FREESIS_URL, json=body, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        r.raise_for_status()
+        df = pd.DataFrame(r.json()["ds1"])
+        df.index = pd.to_datetime(df.pop("TMPV1"))
+        parts.append(df[list(cols)].rename(columns=cols).astype(float))
+    df = pd.concat(parts, axis=1).sort_index().replace(0, float("nan"))
+    money = [c for c in df.columns if c not in ("반대매매", "반대매매비중")]
+    df[money] = df[money] / 1e6           # 백만원 → 조원
+    df["반대매매"] = df["반대매매"] / 100   # 백만원 → 억원
+    return df
+
+
+def pct_rank(s):
+    """마지막 값이 기간 내에서 몇 % 위치인지 (0 = 기간 최저, 100 = 최고)."""
+    s = s.dropna()
+    return float((s < s.iloc[-1]).mean() * 100) if len(s) else float("nan")
+
+
+with sub_credit:   # Page 9 리스크 관리 > 예탁금·신용잔고
+    st.subheader("💳 지수 vs 투자자예탁금 · 신용융자 잔고")
+    st.caption("신용융자 잔고가 지수보다 먼저 꺾이거나, 지수 하락 중 신용이 급감(반대매매 급증)하면 레버리지 청산 = 상대적 저점 신호로 "
+               "보는 경우가 많습니다. 반대로 지수 횡보 중 신용만 쌓이면 과열·하방 리스크. 신용÷예탁금 비율은 '대기 자금 대비 빚투' 수준입니다.")
+    k1, k2, k3 = st.columns([3, 1, 2])
+    cr_per = k1.radio("기간", ["1년", "3년", "5년", "10년", "20년", "Max"], index=2, horizontal=True, key="cr_per")
+    cr_log = k2.radio("지수 축", ["선형", "로그"], horizontal=True, key="cr_log") == "로그"
+    cr_show = k3.multiselect("보조축(조원)", ["신용융자", "예탁금"], default=["신용융자", "예탁금"], key="cr_show")
+    try:
+        cd_all = get_credit_deposit()
+    except Exception as e:
+        st.error(f"금융투자협회 FreeSIS 조회 실패: {e}")
+        cd_all = None
+    if cd_all is not None:
+        cr_start = pd.Timestamp(get_start_date(cr_per))
+        cd = cd_all[cd_all.index >= cr_start]
+        st.caption(f"최근 집계일 {cd_all.index.max():%Y-%m-%d} (FreeSIS는 보통 1~2영업일 늦게 반영)")
+        for mkt, (ccol, ytk) in CREDIT_MARKETS.items():
+            px_s = get_single_index_close(ytk, (cr_start - pd.Timedelta(days=7)).strftime("%Y-%m-%d"))
+            px_s = px_s[px_s.index >= cr_start]
+            m = pd.DataFrame({"지수": px_s, "신용융자": cd[ccol], "예탁금": cd["예탁금"]}).dropna(subset=["신용융자"])
+            m["지수"] = m["지수"].ffill()
+            m["신용/예탁금"] = m["신용융자"] / m["예탁금"] * 100
+            m = m.dropna(subset=["지수"])
+            if m.empty:
+                st.warning(f"{mkt}: 선택한 기간에 데이터가 없습니다.")
+                continue
+            st.markdown(f"#### {mkt}")
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.72, 0.28], vertical_spacing=0.05,
+                                specs=[[{"secondary_y": True}], [{}]])
+            fig.add_scatter(x=m.index, y=m["지수"], name=mkt, line=dict(color="#374151", width=1.6),
+                            hovertemplate="%{y:,.2f}<extra>" + mkt + "</extra>", row=1, col=1)
+            for name, color in (("신용융자", "#e63946"), ("예탁금", "#2a9d8f")):
+                if name in cr_show:
+                    fig.add_scatter(x=m.index, y=m[name], name=f"{name}(조원, 우)", line=dict(color=color, width=1.4),
+                                    hovertemplate="%{y:,.2f}조<extra>" + name + "</extra>", secondary_y=True, row=1, col=1)
+            r = m["신용/예탁금"]
+            fig.add_scatter(x=m.index, y=r, name="신용/예탁금(%)", line=dict(color="#8e6cc7", width=1.3), showlegend=False,
+                            hovertemplate="%{y:.1f}%<extra>신용/예탁금</extra>", row=2, col=1)
+            for q, dash in ((0.9, "dot"), (0.1, "dot")):   # 기간 상·하위 10% 선 — 과열/바닥권 눈금
+                fig.add_hline(y=r.quantile(q), line=dict(color="#9aa3af", dash=dash, width=1), row=2, col=1,
+                              annotation_text=f"{'상위' if q > 0.5 else '하위'} 10% {r.quantile(q):.1f}%",
+                              annotation_position="top left", annotation_font_size=10)
+            fig.update_yaxes(type="log" if cr_log else "linear", tickformat=",.0f", title_text=mkt, row=1, col=1, secondary_y=False)
+            fig.update_yaxes(showgrid=False, tickformat=",.0f", title_text="조원", row=1, col=1, secondary_y=True)
+            fig.update_yaxes(title_text="신용/예탁금 %", row=2, col=1)
+            apply_title_and_legend(fig, f"{mkt} {m['지수'].iloc[-1]:,.2f} · 신용 {m['신용융자'].iloc[-1]:,.2f}조 · "
+                                        f"예탁금 {m['예탁금'].iloc[-1]:,.1f}조 ({'로그' if cr_log else '선형'}축)", height=560)
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": False}, key=f"credit_{mkt}")
+
+            chg = m.pct_change(20)   # 20거래일 변화율 상관 — 수준 상관은 둘 다 우상향이면 높게 나와 착시가 큼
+            st.dataframe(pd.DataFrame({
+                "현재": [m[c].iloc[-1] for c in ("신용융자", "예탁금", "신용/예탁금")],
+                "기간 최저": [m[c].min() for c in ("신용융자", "예탁금", "신용/예탁금")],
+                "기간 최고": [m[c].max() for c in ("신용융자", "예탁금", "신용/예탁금")],
+                "기간 내 위치(%)": [pct_rank(m[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
+                "지수와 상관(수준)": [m["지수"].corr(m[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
+                "지수와 상관(20일 변화율)": [chg["지수"].corr(chg[c]) for c in ("신용융자", "예탁금", "신용/예탁금")],
+            }, index=["신용융자(조원)", "예탁금(조원)", "신용/예탁금(%)"]).style.format("{:,.2f}"), use_container_width=True)
+
+        st.markdown("#### 반대매매 · 위탁매매 미수금 (코스피+코스닥 합산)")
+        fig_r = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_r.add_bar(x=cd.index, y=cd["반대매매"], name="반대매매(억원)", marker_color="#e63946",
+                      hovertemplate="%{y:,.0f}억<extra>반대매매</extra>")
+        fig_r.add_scatter(x=cd.index, y=cd["반대매매비중"], name="미수금 대비 반대매매 비중(%, 우)",
+                          line=dict(color="#374151", width=1.2), hovertemplate="%{y:.1f}%<extra>비중</extra>", secondary_y=True)
+        fig_r.update_yaxes(title_text="억원", tickformat=",", secondary_y=False)
+        fig_r.update_yaxes(title_text="%", showgrid=False, secondary_y=True)
+        apply_title_and_legend(fig_r, f"반대매매 {cd['반대매매'].iloc[-1]:,.0f}억 · 비중 {cd['반대매매비중'].iloc[-1]:.1f}%", height=360)
+        fig_r.update_layout(hovermode="x unified")
+        st.plotly_chart(fig_r, use_container_width=True, config={"scrollZoom": False}, key="credit_margin_call")
+        st.caption("출처: 금융투자협회 FreeSIS(증시자금추이·신용공여잔고) · 지수는 Yahoo Finance · 예탁금은 시장 구분 없는 전체 값이라 "
+                   "신용/예탁금 비율은 '해당 시장 신용융자 ÷ 전체 예탁금' · 기간 내 위치 = 기간 중 현재값보다 낮았던 날의 비율 · 6시간 캐시")
 
 
 # ==========================================
@@ -4149,12 +4267,12 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
     inv_per = c1.radio("기간", list(INV_PERIODS), index=2, horizontal=True, key="inv_per")
     inv_cum_from = c2.radio("누적 기준", ["기간 시작일", "올해 1월 1일"], horizontal=True, key="inv_cum",
                             help="누적 순매수를 어디서부터 더할지. '올해 1월 1일'은 기간이 YTD보다 짧을 때만 의미가 있습니다.")
+    inv_log = c3.radio("지수 축", ["선형", "로그"], horizontal=True, key="inv_log",
+                       help="로그축은 같은 높이 = 같은 등락률. 3년·5년처럼 지수 수준이 크게 바뀐 기간에 유용합니다.") == "로그"
     inv_sel = st.multiselect("투자자", INV_ALL, default=["개인", "외국인", "기관", "금융투자", "연기금"], key="inv_sel",
                              help="금융투자·연기금은 '기관'에 포함된 세부 항목입니다.")
     today = datetime.date.today()
     inv_start = datetime.date(today.year, 1, 1) if INV_PERIODS[inv_per] is None else today - datetime.timedelta(days=INV_PERIODS[inv_per])
-    inv_log = c3.radio("지수 축", ["선형", "로그"], horizontal=True, key="inv_log",
-                       help="로그축은 같은 높이 = 같은 등락률. 3년·5년처럼 지수 수준이 크게 바뀐 기간에 유용합니다.") == "로그"
     cum_base = datetime.date(today.year, 1, 1) if inv_cum_from == "올해 1월 1일" and inv_start > datetime.date(today.year, 1, 1) else inv_start
     cum_label = f"{cum_base:%Y-%m-%d}부터"
     inv_res, inv_src = {}, set()
@@ -4195,10 +4313,6 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
                "기관 = 금융투자·보험·투신·사모·은행·연기금·기타금융 합계 · 외국인 = 등록 외국인(기타외국인 제외) · "
                "회색선 = 지수 종가(우측 축) · 30분 캐시")
 
-    # --- 외국인 수급 vs 매크로 -------------------------------------------------
-    st.divider()
-    st.subheader("🌐 외국인 수급 vs 매크로 (미국채 금리 · 달러/원)")
-    m1, m2, m3 = st.columns([2, 2, 3])
     # --- 지수 기술적 차트 -------------------------------------------------------
     st.divider()
     st.subheader("📐 지수 차트 — 이동평균 · 매물대 · RSI")
@@ -4220,6 +4334,10 @@ with sub_market:   # Page 11 하위 탭 — 컨테이너는 나중에 채워도 
     st.caption("기간·지수 축은 위 수급 차트와 같은 선택을 씁니다 · 출처 Yahoo Finance(^KS11·^KQ11) · "
                "매물대는 일봉 근사(하루 거래량을 (고가+저가+종가)/3 가격대에 배정) · 이평선·RSI는 기간 이전 데이터로 미리 계산")
 
+    # --- 외국인 수급 vs 매크로 -------------------------------------------------
+    st.divider()
+    st.subheader("🌐 외국인 수급 vs 매크로 (미국채 금리 · 달러/원)")
+    m1, m2, m3 = st.columns([2, 2, 3])
     mac_mkt = m1.radio("외국인 순매수", ["코스피", "코스닥", "합산"], horizontal=True, key="mac_mkt")
     tenor = m2.radio("미국채 만기", ["10년", "2년"], horizontal=True, key="mac_tenor",
                      help="10년 = 글로벌 할인율·위험자산 밸류에이션(기본). 2년 = 연준 정책금리 기대 → 달러 방향에 더 민감.")
